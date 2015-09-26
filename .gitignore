@@ -1,0 +1,6 @@
+.DS_Store
+CMakeLists/
+CMakeLists.txt.user
+Makefile
+cmake_install.cmake
+test/
