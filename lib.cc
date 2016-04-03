@@ -1,5 +1,5 @@
-/* lib.cc (updated on 2015/09/26)
- * Copyright (C) 2015 renny1398.
+/* lib.cc (updated on 2016/04/03)
+ * Copyright (C) 2016 renny1398.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -61,6 +61,7 @@ const unsigned char KEY_ERA[] = "4eDbc9w8E32bBgs6";
 const unsigned char KEY_SSG[] = "7r3iBgm+z26!qy9a";
 const unsigned char KEY_SLV[] = "E+Aw@Cxbs-usgcw)";
 const unsigned char KEY_SGB[] = "(yD@pig4+k6pe-nq";
+const unsigned char KEY_IKB[] = "Cwdb(5A4iF+Dx@xe";
 
 
 struct KEY_INFO {
@@ -92,6 +93,7 @@ const KEY_INFO KEYS[] = {
   { "SSG", KEY_SSG },
   { "SLV", KEY_SLV },
   { "SGB", KEY_SGB },
+  { "IKB", KEY_IKB },
   { "", NULL }
 };
 
