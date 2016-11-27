@@ -52,7 +52,7 @@ int main(int argc, char** argv)
   do {
     std::pair<string, loop_struct> ogg_loop;
     string str;
-    while (getline(csv_stream, str, '\r')){
+    while (getline(csv_stream, str, '\n')){
       string token;
       istringstream iss(str);
       

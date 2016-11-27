@@ -1,4 +1,4 @@
-/* lib.cc (updated on 2016/04/03)
+/* lib.cc (updated on 2016/11/27)
  * Copyright (C) 2016 renny1398.
  *
  * This program is free software; you can redistribute it and/or
@@ -62,7 +62,7 @@ const unsigned char KEY_SSG[] = "7r3iBgm+z26!qy9a";
 const unsigned char KEY_SLV[] = "E+Aw@Cxbs-usgcw)";
 const unsigned char KEY_SGB[] = "(yD@pig4+k6pe-nq";
 const unsigned char KEY_IKB[] = "Cwdb(5A4iF+Dx@xe";
-
+const unsigned char KEY_SLT_T[] = "6Bef2how2w@npyrr";
 
 struct KEY_INFO {
   char product[8];
@@ -94,6 +94,7 @@ const KEY_INFO KEYS[] = {
   { "SLV", KEY_SLV },
   { "SGB", KEY_SGB },
   { "IKB", KEY_IKB },
+  { "SLT_T", KEY_SLT_T },
   { "", NULL }
 };
 
@@ -222,8 +223,18 @@ void EncryptedLib::Read(void *buff, unsigned int len, unsigned int offset) {
 }
 
 
+bool Lib::GetKeyTable(const string& product, KEY_TABLE_TYPE keyTable) {
+  for (int i = 0; KEYS[i].key != NULL; i++) {
+    if (product == KEYS[i].product) {
+      Camellia_Ekeygen(128, KEYS[i].key, keyTable);
+      return true;
+    }
+  }
+  return false;
+}
 
-Lib* Lib::Open(const string& file_name) {
+
+Lib* Lib::Open(const string& file_name, const string& product) {
 
   ifstream ifs(file_name.c_str(), ios::in | ios::binary);
 
@@ -235,16 +246,8 @@ Lib* Lib::Open(const string& file_name) {
   KEY_TABLE_TYPE keyTable;
   LIBUHDR hdr;
 
-  // search a key that corresponds to the data
-  for (int i = 0; KEYS[i].key != NULL; i++) {
-    Camellia_Ekeygen(128, KEYS[i].key, keyTable);
-    DecryptBlock(ifs, keyTable, &hdr, 16, 0);
-    if (hdr.signature[0] == 'L' && hdr.signature[1] == 'I' && hdr.signature[2] == 'B') {
-      cout << "Camellia key type: " << KEYS[i].product << endl;
-      break;
-    }
-  }
-
+  GetKeyTable(product, keyTable);
+  DecryptBlock(ifs, keyTable, &hdr, 16, 0);
   if (hdr.signature[0] != 'L' || hdr.signature[1] != 'I' || hdr.signature[2] != 'B') {
     cerr << "Error: this file is not a Cammelia data file." << endl;
     return 0;
@@ -266,8 +269,6 @@ Lib* Lib::Open(const string& file_name) {
 
   return 0;
 }
-
-
 
 
 void Libu_t::Extract(bool flatten, const string& prefix, unsigned int offset, unsigned int length) {
@@ -337,15 +338,10 @@ void Libp_t::Extract(bool flatten, const string &prefix, unsigned int entry1_off
   }
 
   LIBPENTRY1* curr = entries1_ + entry1_offset;
-  // cout << entry1_offset << endl;
-  // cout << entry_count << endl;
 
   for (unsigned int i = 0; i < entry_count; i++) {
-    string file_name = prefix + dir_delim + curr[i].file_name;
-
-    cout << "File name = " << file_name << endl;
-    cout << curr[i].file_name << endl;
-    // cout << entries1_[0].length << endl;
+    const string dir_name = prefix == "./" ? prefix : prefix + dir_delim;
+    const string file_name = dir_name + curr[i].file_name;
 
     if (curr[i].flags & LIBPENTRY1::kFlagFile) {
       char* buff = new char[curr[i].length];

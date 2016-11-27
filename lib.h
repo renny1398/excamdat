@@ -30,14 +30,17 @@ public:
 
   virtual void Extract(bool flatten = false) = 0;
 
-  static Lib* Open(const std::string& file_name);
+  static Lib* Open(const std::string& file_name, const std::string& product);
+  static Lib* Open(const std::string& file_name, const KEY_TABLE_TYPE keyTable);
+  
+  static bool GetKeyTable(const std::string& product, KEY_TABLE_TYPE keyTable);
 
   bool IsVerbose() const { return is_verbose_; }
   void Verbose(bool verbose = true) { is_verbose_ = verbose; }
 
-protected:
   static void DecryptBlock(std::ifstream& ifs, const KEY_TABLE_TYPE keyTable, void* buff, unsigned int len, unsigned int offset);
 
+protected:
   std::ifstream ifs_;
 
 private:

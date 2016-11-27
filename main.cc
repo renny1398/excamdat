@@ -32,6 +32,7 @@ using namespace std;
 
 
 struct Params {
+  string product_name;
   string input_file_name;
   string output_dir;
   bool is_verbose;
@@ -41,7 +42,7 @@ struct Params {
 
 
 void print_usage() {
-  cout << "Usage: excammdat <input data> [-o output dir] [--verbose] [--only-decrypt]" << endl;
+  cout << "Usage: excammdat <product name> <input data> [-o output dir] [--verbose] [--only-decrypt]" << endl;
 }
 
 
@@ -71,7 +72,11 @@ bool get_params(int argc, const char** argv, Params* params) {
       continue;
     }
 
-    params->input_file_name = arg;
+    if (params->product_name.empty()) {
+      params->product_name = arg;
+    } else {
+      params->input_file_name = arg;
+    }
   }
 
   if (flag_output_dir == true) {
@@ -80,6 +85,42 @@ bool get_params(int argc, const char** argv, Params* params) {
   }
 
   return true;
+}
+
+#include "camellia.h"
+#include <fstream>
+
+int Decrypt(const string& filename, const string& product) {
+  ifstream ifs(filename);
+  if (ifs.is_open() == false) {
+    cerr << "Error: file is not found." << endl;
+    return -1;
+  }
+  
+  const string output(filename + ".decrypted");
+  ofstream ofs(output, ios::binary);
+  if (ofs.is_open() == false) {
+    cerr << "Error: output file cannot be opened.";
+    return -1;
+  }
+  
+  size_t len = (size_t)ifs.seekg(0, ios::end).tellg();
+  ifs.seekg(0, ios::beg);
+  char* buff = new char[len];
+  
+  KEY_TABLE_TYPE keyTable;
+  Lib::GetKeyTable(product, keyTable);
+  
+  Lib::DecryptBlock(ifs, keyTable, buff, len, 0);
+  ofs.write(buff, len);
+
+  delete [] buff;
+  ofs.close();
+  ifs.close();
+
+  cout << "Decrypted '" << filename << "' and saved as '" << output << "'." << endl;
+  
+  return 0;
 }
 
 
@@ -97,7 +138,11 @@ int main(int argc, const char** argv) {
 
   setlocale(LC_CTYPE, "jpn");
 
-  Lib* lib = Lib::Open(params.input_file_name);
+  if (params.only_decrypts) {
+    return Decrypt(params.input_file_name, params.product_name);
+  }
+
+  Lib* lib = Lib::Open(params.input_file_name, params.product_name);
   if (lib == NULL) return -1;
 
   lib->Verbose();
