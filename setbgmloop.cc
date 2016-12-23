@@ -20,6 +20,19 @@ struct loop_struct {
   uint32_t loop_length;
 };
 
+namespace {
+
+extern "C" int _fseek64_wrap(FILE* f, ogg_int64_t off ,int whence) {
+  if (f == NULL) { return -1; }
+  return fseek(f, off, whence);
+}
+
+extern "C" int fclose_dummy(void*) {
+  return 0;
+}
+
+} // namespace
+
 int main(int argc, char** argv)
 {
   if (argc < 2) {
@@ -55,17 +68,18 @@ int main(int argc, char** argv)
     while (getline(csv_stream, str, '\n')){
       string token;
       istringstream iss(str);
-      
+
       getline(iss, ogg_loop.first, ',');
       getline(iss, token, ',');
       ogg_loop.second.loop_start = round(stof(token));
       getline(iss, token, ',');
-      ogg_loop.second.loop_length = round(stof(token)) - ogg_loop.second.loop_start;
+      if (token.empty()) {
+        ogg_loop.second.loop_length = 0;
+      } else {
+        uint32_t loop_end = static_cast<uint32_t>(round(stof(token)));
+        ogg_loop.second.loop_length = loop_end - ogg_loop.second.loop_start;
+      }
       
-      // cout << ogg_loop.first << " in " << argv[1] << ".csv:" << endl;
-      // cout << " LOOPSTART=" << ogg_loop.second.loop_start << endl;
-      // cout << " LOOPLENGTH=" << ogg_loop.second.loop_length << endl;
-
       ogg_map.insert(ogg_loop);
     }
   } while (false);
@@ -95,7 +109,7 @@ int main(int argc, char** argv)
       continue;
     }
     key.erase(period_pos);
-    map<string, loop_struct>::const_iterator it = ogg_map.find(key);
+    map<string, loop_struct>::iterator it = ogg_map.find(key);
     if (it == ogg_map.end()) {
       continue;
     }
@@ -109,7 +123,21 @@ int main(int argc, char** argv)
       cerr << "Failed to open \"" << filename << "\"." << endl;
       return 1;
     }
-    
+
+    if (it->second.loop_length == 0) {
+      OggVorbis_File vf;
+      ov_callbacks callbacks = {
+        (size_t (*)(void *, size_t, size_t, void *)) fread,
+        (int (*)(void *, ogg_int64_t, int))          _fseek64_wrap,
+        (int (*)(void *))                            fclose_dummy,
+        (long (*)(void *))                           ftell
+      };
+      ov_open_callbacks(fh_in, &vf, NULL, 0, callbacks);
+      it->second.loop_length = ov_pcm_total(&vf, -1) - it->second.loop_start;
+      ov_clear(&vf);
+      fseek(fh_in, 0, 0);
+    }
+
     vcedit_state* state = vcedit_new_state();
     if (vcedit_open(state, fh_in) < 0) {
       cerr << "Failed to vcedit_open \"" << filename << "\"." << endl;
