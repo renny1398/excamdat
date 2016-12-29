@@ -36,7 +36,7 @@ extern "C" int fclose_dummy(void*) {
 int main(int argc, char** argv)
 {
   if (argc < 2) {
-    cerr << "Invalid argument." << endl;
+    cerr << "ERROR: invalid argument." << endl;
     return 1;
   }
   
@@ -44,7 +44,7 @@ int main(int argc, char** argv)
   string bgm_loop_path(argv[0]);
   const size_t found_delim = bgm_loop_path.find_last_of("/\\");
   if (found_delim == string::npos) {
-    cerr << "invalid parameter 0 (\"" << argv[0] << "\")" << endl;
+    cerr << "ERROR: invalid parameter 0 (\"" << argv[0] << "\")" << endl;
     return 1;
   }
   bgm_loop_path.replace(found_delim + 1, string::npos,
@@ -56,7 +56,7 @@ int main(int argc, char** argv)
   csv_filename.append(".csv");
   ifstream csv_stream(csv_filename);
   if (csv_stream.is_open() == false) {
-    cerr << "Failed to open bgm_loop csv \"" << csv_filename << "\" (product: " << argv[1] << ')' << endl;
+    cerr << "ERROR: failed to open bgm-loop csv \"" << csv_filename << "\" (product: " << argv[1] << ')' << endl;
     return 1;
   }
   
@@ -65,6 +65,7 @@ int main(int argc, char** argv)
   do {
     std::pair<string, loop_struct> ogg_loop;
     string str;
+    getline(csv_stream, str, '\n');  // dummy
     while (getline(csv_stream, str, '\n')){
       string token;
       istringstream iss(str);
@@ -73,7 +74,7 @@ int main(int argc, char** argv)
       getline(iss, token, ',');
       ogg_loop.second.loop_start = round(stof(token));
       getline(iss, token, ',');
-      if (token.empty()) {
+      if (token.empty() || token.at(0) == '\r') {
         ogg_loop.second.loop_length = 0;
       } else {
         uint32_t loop_end = static_cast<uint32_t>(round(stof(token)));
@@ -96,7 +97,7 @@ int main(int argc, char** argv)
 
   DIR *dir = opendir(ogg_path.c_str());
   if (dir == NULL) {
-    cerr << "Failed to open a directory \"" << ogg_path << "\"." << endl;
+    cerr << "ERROR: failed to open a directory \"" << ogg_path << "\"." << endl;
     return 1;
   }
   
@@ -120,7 +121,7 @@ int main(int argc, char** argv)
     // open vorbis file
     FILE* fh_in = fopen(filename.c_str(), "rb");
     if (fh_in == NULL) {
-      cerr << "Failed to open \"" << filename << "\"." << endl;
+      cerr << "ERROR: failed to open \"" << filename << "\"." << endl;
       return 1;
     }
 
@@ -140,7 +141,7 @@ int main(int argc, char** argv)
 
     vcedit_state* state = vcedit_new_state();
     if (vcedit_open(state, fh_in) < 0) {
-      cerr << "Failed to vcedit_open \"" << filename << "\"." << endl;
+      cerr << "ERROR: failed to vcedit_open \"" << filename << "\"." << endl;
       fclose(fh_in);
       return 1;
     }
@@ -174,7 +175,7 @@ int main(int argc, char** argv)
     out_filename.append(it->first).append(".loop.ogg");
     FILE* fh_out = fopen(out_filename.c_str(), "wb");
     if (fh_out == NULL) {
-      cerr << "Failed to open \"" << out_filename << "\"." << endl;
+      cerr << "ERROR: failed to open \"" << out_filename << "\"." << endl;
       vcedit_clear(state);
       fclose(fh_in);
       return 1;
