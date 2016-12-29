@@ -1,4 +1,7 @@
+.gitignore~
 .DS_Store
+CMakeCache.txt
+CMakeFiles/
 CMakeLists/
 CMakeLists.txt.user
 Makefile
