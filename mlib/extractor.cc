@@ -27,6 +27,51 @@
 #include "reader.h"
 #include "extractor.h"
 
+namespace {
+
+Sint64 sdl_custom_size(struct SDL_RWops *context) {
+  using namespace mlib;
+  MLib *mlib = reinterpret_cast<MLib *>(context->hidden.unknown.data1);
+  return static_cast<Sint64>(mlib->GetFileSize());
+}
+
+Sint64 sdl_custom_seek(struct SDL_RWops *context, Sint64 offset, int whence) {
+  using namespace mlib;
+  MLib *mlib = reinterpret_cast<MLib *>(context->hidden.unknown.data1);
+  return mlib->Seek(offset, whence);
+}
+
+size_t sdl_custom_read(struct SDL_RWops *context, void *ptr, size_t size, size_t maxnum) {
+  using namespace mlib;
+  MLib *mlib = reinterpret_cast<MLib *>(context->hidden.unknown.data1);
+  return mlib->Read(size * maxnum, ptr);
+}
+
+size_t sdl_custom_write(struct SDL_RWops */*context*/, const void */*ptr*/, size_t /*size*/, size_t /*num*/) {
+  return 0;
+}
+
+int sdl_custom_close(struct SDL_RWops */*context*/) {
+  return 0;
+}
+
+SDL_RWops *SDL_RWFromMLib(mlib::MLib* mlib) {
+  SDL_RWops *rwops;
+  rwops = SDL_AllocRW();
+  if (rwops) {
+    rwops->size = &sdl_custom_size;
+    rwops->seek = &sdl_custom_seek;
+    rwops->read = &sdl_custom_read;
+    rwops->write = &sdl_custom_write;
+    rwops->close = &sdl_custom_close;
+    rwops->type = SDL_RWOPS_UNKNOWN;
+    rwops->hidden.unknown.data1 = mlib;
+  }
+  return rwops;
+}
+
+} // namespace
+
 namespace mlib {
 
 #ifdef _WINDOWS
@@ -54,7 +99,7 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
   off_t file_pos_tmp = dzi->Tell();
   dzi->Seek(0, SEEK_SET);
   dzi->Read(dzi_size, dzi_ptr);
-  dzi->Seek(file_pos_tmp, SEEK_CUR);
+  dzi->Seek(file_pos_tmp, SEEK_SET);
   dzi_ptr[dzi_size] = '\0';
 
   if (dzi_ptr[0] != 'D' || dzi_ptr[1] != 'Z' || dzi_ptr[2] != 'I') {
@@ -114,19 +159,14 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
           tex_file = tex_entry->GetEntry(tex_name + ".webp");
           if (tex_file == NULL) continue;
         }
-        const unsigned int tex_file_size = tex_file->GetFileSize();
-        if (buf.size() < tex_file_size) {
-          buf.resize(tex_file_size);
-        }
         file_pos_tmp = tex_file->Tell();
         tex_file->Seek(0, SEEK_SET);
-        tex_file->Read(tex_file_size, &buf[0]);
-        dzi->Seek(file_pos_tmp, SEEK_CUR);
-        SDL_RWops *ops = SDL_RWFromConstMem(&buf[0], tex_file_size);
-        SDL_Surface *tex_surface = IMG_Load_RW(ops, 0);
+        SDL_RWops *rwops = SDL_RWFromMLib(tex_file);
+        SDL_Surface *tex_surface = IMG_Load_RW(rwops, 0);
         SDL_BlitSurface(tex_surface, NULL, surface, &rect);
         SDL_FreeSurface(tex_surface);
-        SDL_RWclose(ops);
+        SDL_RWclose(rwops);
+        tex_file->Seek(file_pos_tmp, SEEK_SET);
       }
     }
 
