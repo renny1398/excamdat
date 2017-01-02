@@ -29,6 +29,9 @@
 
 namespace {
 
+/*const*/char mgf_header[] = "\x4d\x61\x6c\x69\x65\x47\x46\0";
+const char png_header[] = "\x89PNG\x0d\x0a\x1a\x0a";
+
 Sint64 sdl_custom_size(struct SDL_RWops *context) {
   using namespace mlib;
   MLib *mlib = reinterpret_cast<MLib *>(context->hidden.unknown.data1);
@@ -44,7 +47,20 @@ Sint64 sdl_custom_seek(struct SDL_RWops *context, Sint64 offset, int whence) {
 size_t sdl_custom_read(struct SDL_RWops *context, void *ptr, size_t size, size_t maxnum) {
   using namespace mlib;
   MLib *mlib = reinterpret_cast<MLib *>(context->hidden.unknown.data1);
-  return mlib->Read(size * maxnum, ptr);
+  char *char_ptr = reinterpret_cast<char *>(ptr);
+  size_t read_size = size * maxnum;
+  size_t ret = 0;
+  off_t pos = mlib->Tell();
+  if (pos < 8 && reinterpret_cast<char *>(context->hidden.unknown.data2) == mgf_header) {
+    const size_t header_read_size = std::min(static_cast<unsigned long long>(8), pos + read_size) - pos;
+    ::memcpy(char_ptr, png_header + pos, header_read_size);
+    char_ptr += header_read_size;
+    read_size -= header_read_size;
+    mlib->Seek(header_read_size, SEEK_CUR);
+    ret = header_read_size;
+  }
+  ret += mlib->Read(read_size, char_ptr);
+  return ret;
 }
 
 size_t sdl_custom_write(struct SDL_RWops */*context*/, const void */*ptr*/, size_t /*size*/, size_t /*num*/) {
@@ -66,6 +82,17 @@ SDL_RWops *SDL_RWFromMLib(mlib::MLib* mlib) {
     rwops->close = &sdl_custom_close;
     rwops->type = SDL_RWOPS_UNKNOWN;
     rwops->hidden.unknown.data1 = mlib;
+    if (8 <= mlib->GetFileSize()) {
+      char buf[8];
+      mlib->Seek(0, SEEK_SET);
+      mlib->Read(8, buf);
+      if (::memcmp(buf, mgf_header, 8) == 0) {
+        rwops->hidden.unknown.data2 = static_cast<void *>(mgf_header);
+      } else {
+        rwops->hidden.unknown.data2 = nullptr;
+      }
+    }
+    mlib->Seek(0, SEEK_SET);
   }
   return rwops;
 }
@@ -121,8 +148,7 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
   const int lv_max = std::stoi(token);
 
   std::cout << "-- Extracting '" << dzi->GetLocation() << kDelim
-            << dzi->GetName() << "' (as PNG file)...";
-  std::cout.flush();
+            << dzi->GetName() << "' as PNG file:" << std::endl;
 
   for (int l = 0; l < lv_max; ++l, width >>= 1, height >>= 1) {
     std::getline(ss, token, ',');
@@ -154,36 +180,41 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
         std::replace(tex_name.begin(), tex_name.end(), '\\', '/');
 #endif
         if (tex_name.empty()) continue;
-        MLib *tex_file = tex_entry->GetEntry(tex_name + ".png");
-        if (tex_file == NULL) {
-          tex_file = tex_entry->GetEntry(tex_name + ".webp");
-          if (tex_file == NULL) continue;
+        MLib *tex_file = tex_entry->GetEntry(tex_name + ".mgf");
+        if (tex_file == nullptr) {
+          MLib *tex_file = tex_entry->GetEntry(tex_name + ".png");
+          if (tex_file == nullptr) {
+            tex_file = tex_entry->GetEntry(tex_name + ".webp");
+            if (tex_file == nullptr) continue;
+          }
         }
-        file_pos_tmp = tex_file->Tell();
-        tex_file->Seek(0, SEEK_SET);
+        std::cout << " -- Loading " << tex_file->GetName() << "...";
+        std::cout.flush();
         SDL_RWops *rwops = SDL_RWFromMLib(tex_file);
         SDL_Surface *tex_surface = IMG_Load_RW(rwops, 0);
-        SDL_BlitSurface(tex_surface, NULL, surface, &rect);
+        SDL_BlitSurface(tex_surface, nullptr, surface, &rect);
         SDL_FreeSurface(tex_surface);
         SDL_RWclose(rwops);
-        tex_file->Seek(file_pos_tmp, SEEK_SET);
+        std::cout << "OK." << std::endl;
       }
     }
 
-    std::string out_name(fs_path);
-    out_name.append(1, kDelim);
-    out_name.append(out_name_base);
+    std::string out_name(out_name_base);
     if (texlv_ < 0) {
       out_name.append(1, '_');
       out_name.append(std::to_string(l));
     }
     out_name.append(".png");
-    IMG_SavePNG(surface, out_name.c_str());
+    std::cout << " -- Saving as '" << out_name << "'...";
+    std::string out_fullname(fs_path);
+    out_fullname.append(1, kDelim);
+    out_fullname.append(out_name);
+    IMG_SavePNG(surface, out_fullname.c_str());
     SDL_FreeSurface(surface);
+    std::cout << "OK." << std::endl;
     if (l == texlv_) break;
   }
 
-  std::cout << "OK." << std::endl;
   return true;
 }
 
@@ -216,11 +247,11 @@ bool Extractor::Extract(MLib* mlib, const std::string &fs_path, std::vector<char
     fs_path_tmp.append(entry_name);
 
     if (mgf2png_ && entry_ext == ".mgf") {
-      const bool is_mgf = size >= 8 && !::memcmp(buf_ptr, "\x4d\x61\x6c\x69\x65\x47\x46\0", 8);
+      const bool is_mgf = size >= 8 && !::memcmp(buf_ptr, mgf_header, 8);
       if (is_mgf) {
         fs_path_tmp = fs_path_tmp.substr(0, fs_path_tmp.size() - 4);
         fs_path_tmp.append(".png");
-        ::memcpy(buf_ptr, "\x89PNG\x0D\x0A\x1A\x0A", 8);
+        ::memcpy(buf_ptr, png_header, 8);
       }
     }
 
