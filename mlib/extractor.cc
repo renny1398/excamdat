@@ -182,7 +182,7 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
         if (tex_name.empty()) continue;
         MLib *tex_file = tex_entry->GetEntry(tex_name + ".mgf");
         if (tex_file == nullptr) {
-          MLib *tex_file = tex_entry->GetEntry(tex_name + ".png");
+          tex_file = tex_entry->GetEntry(tex_name + ".png");
           if (tex_file == nullptr) {
             tex_file = tex_entry->GetEntry(tex_name + ".webp");
             if (tex_file == nullptr) continue;
@@ -225,7 +225,6 @@ bool Extractor::Extract(MLib* mlib, const std::string &fs_path, std::vector<char
 
   if (mlib->IsFile()) {
     unsigned int size = mlib->GetFileSize();
-    // char *buf = new char[size];
     std::cout << "-- Extracting '" << mlib->GetLocation() << kDelim
               << entry_name << "'...";
     std::cout.flush();
@@ -292,7 +291,7 @@ bool Extractor::Extract(MLib* mlib, const std::string &fs_path, std::vector<char
     tex_entry = mlib->Child("tex");
   }
   const unsigned int child_number = mlib->GetChildNumber();
-  for (unsigned int i = 0; i < child_number; ++i) {
+  for (unsigned int i = 0; stop_ == false && i < child_number; ++i) {
     MLib *child = mlib->Child(i);
     const std::string &child_name = child->GetName();
     size_t child_name_ext_index = child_name.find_last_of(".");
@@ -317,6 +316,9 @@ bool Extractor::Extract(MLib* mlib, const std::string &fs_path, std::vector<char
 }
 
 bool Extractor::Extract(MLib* mlib, const std::string &lib_path, const std::string &fs_path) {
+
+  stop_ = false;
+
   MLib *entry = mlib->GetEntry(lib_path);
   if (entry == NULL) {
     return false;
@@ -334,6 +336,15 @@ bool Extractor::Extract(MLib* mlib, const std::string &lib_path, const std::stri
     fs_path_tmp.push_back('/');
   }
 #endif
+
+  if (mlib->Parent() == nullptr && mlib->IsDirectory() && (mlib->GetChildNumber() != 1 || mlib->Child(0)->IsFile())) {
+    fs_path_tmp.append("data");
+    struct stat st;
+    if (::stat(fs_path_tmp.c_str(), &st) != 0) {
+      ::mkdir(fs_path_tmp.c_str(), 0755);
+    }
+    fs_path_tmp.push_back(kDelim);
+  }
 
   std::vector<char> buf;
   const clock_t clk = ::clock();

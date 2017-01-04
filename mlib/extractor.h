@@ -26,7 +26,7 @@ class Extractor {
 
 public:
   Extractor()
-    : flatten_(false), mgf2png_(true), webp2png_(true), texcat_(true), texlv_(0), svg_(false) {}
+    : flatten_(false), mgf2png_(true), webp2png_(true), texcat_(true), texlv_(0), svg_(false), stop_(false) {}
 
   static void Initialize();
   static void Finalize();
@@ -43,6 +43,7 @@ public:
   }
 
   bool Extract(MLib* mlib, const std::string &lib_path, const std::string &fs_path);
+  void Stop() { stop_ = true; }
 
 protected:
   bool Extract(MLib* mlib, const std::string &fs_path, std::vector<char> &buf);
@@ -54,10 +55,12 @@ private:
 
   bool flatten_;
   bool mgf2png_;
-  bool webp2png_; // TODO: implement webp2png without texcat
+  bool webp2png_;
   bool texcat_;
   int texlv_;
   bool svg_;
+
+  volatile bool stop_;
 };
 
 } // namespace mlib

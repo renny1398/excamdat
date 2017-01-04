@@ -19,6 +19,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <iostream>
 #include <fstream>
 #include "mlib/reader.h"
@@ -205,6 +206,12 @@ bool decrypt(const std::string &product, const std::string& path) {
   return true;
 }
 
+static mlib::Extractor extractor;
+
+void signal_handler(int) {
+  extractor.Stop();
+}
+
 int main(int argc, char **argv) {
 
   if (argc < 2) {
@@ -251,13 +258,14 @@ int main(int argc, char **argv) {
 
   mlib::Extractor::Initialize();
 
-  mlib::Extractor extractor;
   extractor.Flatten(params.flatten);
   extractor.EnableMGFToPNG(params.mgf2png);
   extractor.EnableWebPToPNG(params.webp2png);
   extractor.EnableSVG(!params.skip_svg);
   extractor.EnableTexCat(params.texcat);
   extractor.SetTexLevel(params.tex_level);
+
+  ::signal(SIGINT, &signal_handler);
   extractor.Extract(lib, params.internal_path, params.output_directory);
 
   delete lib;
