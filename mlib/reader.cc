@@ -46,15 +46,22 @@ struct KeyInfo {
 std::set<KeyInfo> key_info_;
 
 bool GetKeyTable(const std::string &product, KEY_TABLE_TYPE key_table) {
-  std::set<KeyInfo>::const_iterator it = key_info_.begin();
-  const std::set<KeyInfo>::const_iterator it_end = key_info_.end();
-  for (; it != it_end; ++it) {
+  for (auto it = key_info_.cbegin(); it != key_info_.cend(); ++it) {
     if (product == it->product_name) {
       Camellia_Ekeygen(128, it->raw_key, key_table);
       return true;
     }
   }
   return false;
+}
+
+bool IsAsciiKey(const unsigned char raw_key[]) {
+  for (auto i = 0; i < 16; ++i) {
+    const auto &c = raw_key[i];
+    if ( ('!' <= c && c <= '+') || ('-' <= c && c <= '~') ) continue;
+    else return false;
+  }
+  return true;
 }
 
 } // namespace
@@ -369,10 +376,11 @@ bool EncryptedLibReader::LoadKeyInfo(const std::string &csv) {
     std::getline(iss, key_info.product_name, ',');
     std::getline(iss, key_info.release_date, ',');
     std::getline(iss, key_info.key, ',');
+
     if (key_info.key.size() != 16) {
       if (key_info.key.size() != 32) continue;
-      std::string::const_iterator it = key_info.key.begin();
-      const std::string::const_iterator it_end = key_info.key.end();
+      auto it = key_info.key.cbegin();
+      const auto it_end = key_info.key.cend();
       for (; it != it_end; ++it) {
         int c = *it;
         if ( ('0' <= c && c <= '9') || ('A' <= c && c <= 'F') ||
@@ -383,6 +391,9 @@ bool EncryptedLibReader::LoadKeyInfo(const std::string &csv) {
       for (int i = 0; i < 16; ++i) {
         std::string s(key_info.key.substr(2*i, 2));
         key_info.raw_key[i] = static_cast<unsigned char>(std::stoi(s, NULL, 16));
+      }
+      if (IsAsciiKey(key_info.raw_key)) {
+        key_info.key.assign(reinterpret_cast<char *>(key_info.raw_key), 16);
       }
     } else {
       ::memcpy(key_info.raw_key, &key_info.key[0], 16);
@@ -395,10 +406,8 @@ bool EncryptedLibReader::LoadKeyInfo(const std::string &csv) {
 void EncryptedLibReader::PrintKeyInfo() {
   std::cout << "PRODUCT_NAME  RELEASE_DATE  KEY\n"
             << "------------- ------------- --------------------------------------------------\n";
-  std::set<KeyInfo>::const_iterator it = key_info_.begin();
-  const std::set<KeyInfo>::const_iterator it_end = key_info_.end();
   std::cout.setf(std::ios::hex, std::ios::basefield);
-  for (; it != it_end; ++it) {
+  for (auto it = key_info_.cbegin(); it != key_info_.cend(); ++it) {
     char fix_product_name[15];
     size_t fix_product_name_len = std::min(it->product_name.size(), static_cast<size_t>(14));
     ::memcpy(fix_product_name, &it->product_name[0], fix_product_name_len);
@@ -407,6 +416,7 @@ void EncryptedLibReader::PrintKeyInfo() {
     char fix_release_date[15];
     size_t fix_release_date_len = std::min(it->release_date.size(), static_cast<size_t>(14));
     if (fix_release_date_len == 8) {
+      // convert 'YYYYMMDD' into 'YYYY/MM/DD'
       ::memcpy(&fix_release_date[0], &it->release_date[0], 4);
       fix_release_date[4] = '/';
       ::memcpy(&fix_release_date[5], &it->release_date[4], 2);
@@ -418,7 +428,7 @@ void EncryptedLibReader::PrintKeyInfo() {
     }
     fix_release_date[fix_release_date_len] = '\0';
     std::cout << std::left << std::setfill(' ') << std::setw(14) << fix_release_date;
-    if (it->key.size() != 16) {
+    if (IsAsciiKey(it->raw_key) == false) {
       std::cout << "{ ";
       const uint32_t *p = reinterpret_cast<const uint32_t *>(it->raw_key);
       for (int i = 0; ; ) {

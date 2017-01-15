@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <ctime>
 
+/*
 bool create_test_data(const char *filename, size_t size) {
   std::ofstream ofs(filename);
   if (ofs.is_open() == false) {
@@ -55,9 +56,10 @@ bool create_test_data(const char *filename, size_t size) {
   ofs.close();
   return true;
 }
+*/
 
 void print_usage() {
-  std::cout << "usage: exmaldat <product-name> [-dfmwst] <input-file> [-p internal-path]\n"
+  std::cout << "Usage: exmaldat <product-name> [-dfmwst] <input-file> [-p internal-path]\n"
             << "       [output-directory]\n\n"
             << "  d  : decrypt an archive, not extract (default: disable)\n"
             << "  f  : flatten directory structure (default: disable)\n"
