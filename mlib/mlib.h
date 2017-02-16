@@ -1,6 +1,6 @@
 #pragma once
 
-/* mlib.h (updated on 2016/12/29)
+/* mlib.h (updated on 2017/02/16)
  * Copyright (C) 2016 renny1398.
  *
  * This program is free software; you can redistribute it and/or
@@ -25,11 +25,36 @@
 
 namespace mlib {
 
-class LibReader;
+////////////////////////////////////////////////////////////////////////
+/// \brief KeyInfo class
+////////////////////////////////////////////////////////////////////////
+
+class KeyInfo {
+public:
+  KeyInfo() : key_string_{0}, cipher_type_(0) {}
+  ~KeyInfo() = default;
+  const unsigned char *key_string() const { return key_string_; }
+  int cipher_type() const { return cipher_type_; }
+  bool IsAsciiKey() const {
+    for (auto i = 0; i < 16; ++i) {
+      const auto &c = key_string_[i];
+      // check if the key string match '[!-+\--~]'
+      if ( ('!' <= c && c <= '+') || ('-' <= c && c <= '~') ) continue;
+      else return false;
+    }
+    return true;
+  }
+private:
+  friend bool LoadKeyInfo(const std::string &csv);
+  unsigned char key_string_[16];
+  int cipher_type_;
+};
 
 ////////////////////////////////////////////////////////////////////////
 /// \brief The MLib class
 ////////////////////////////////////////////////////////////////////////
+
+class LibReader;
 
 class MLib {
 public:
@@ -37,6 +62,8 @@ public:
   virtual ~MLib();
 
   static MLib *Open(const std::string &filename, const std::string &product);
+
+  bool IsVerbose() const { return verbose_; }
 
   virtual const std::string &GetName() const = 0;
   const std::string &GetLocation() const;
@@ -68,6 +95,7 @@ private:
   MLib *GetEntry(const std::string &path, size_t index);
   void LoadChild();
 
+  bool verbose_;
   MLib *const parent_;
   std::string location_;
   std::vector<MLib *> children_;
@@ -206,5 +234,13 @@ private:
   const unsigned int entry_index_;
   const std::string name_;
 };
+
+////////////////////////////////////////////////////////////////////////
+/// \brief mlib common functions
+////////////////////////////////////////////////////////////////////////
+
+bool LoadKeyInfo(const std::string &csv);
+bool FindKeyInfo(const std::string &product, const KeyInfo **dest);
+void PrintKeyInfo();
 
 } //namespace mlib

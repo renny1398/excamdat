@@ -1,4 +1,4 @@
-/* reader.cc (updated on 2016/12/29)
+/* reader.cc (updated on 2017/02/16)
  * Copyright (C) 2016 renny1398.
  *
  * This program is free software; you can redistribute it and/or
@@ -16,14 +16,12 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
-#include <memory>
 #include <algorithm>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <iostream>
 #include <iomanip>
-#include <sstream>
 #include <fstream>
 #include <cstdio>
 #include <cassert>
@@ -31,37 +29,12 @@
 
 namespace {
 
-struct KeyInfo {
-  std::string product_name;
-  std::string release_date;
-  std::string key;
-  unsigned char raw_key[16];
-  friend bool operator<(const KeyInfo &lhs, const KeyInfo &rhs) {
-    if (lhs.release_date < rhs.release_date) return true;
-    else if (lhs.release_date > rhs.release_date) return false;
-    else if (lhs.product_name < rhs.product_name) return true;
-    else return false;
-  }
-};
-std::set<KeyInfo> key_info_;
-
-bool GetKeyTable(const std::string &product, KEY_TABLE_TYPE key_table) {
-  for (auto it = key_info_.cbegin(); it != key_info_.cend(); ++it) {
-    if (product == it->product_name) {
-      Camellia_Ekeygen(128, it->raw_key, key_table);
-      return true;
-    }
-  }
-  return false;
+inline unsigned int rotl(unsigned int data, unsigned int bits) {
+ return (data << bits) | (data >> (32 - bits));
 }
 
-bool IsAsciiKey(const unsigned char raw_key[]) {
-  for (auto i = 0; i < 16; ++i) {
-    const auto &c = raw_key[i];
-    if ( ('!' <= c && c <= '+') || ('-' <= c && c <= '~') ) continue;
-    else return false;
-  }
-  return true;
+inline unsigned int rotr(unsigned int data, unsigned int bits) {
+ return (data >> bits) | (data << (32 - bits));
 }
 
 } // namespace
@@ -309,24 +282,14 @@ size_t UnencryptedLibReader::MemoryCopy(char *cache, size_t /*page_no*/, size_t 
 // EncryptedLibReader Class Function Definitions
 ////////////////////////////////////////////////////////////////////////
 
-EncryptedLibReader::EncryptedLibReader(int fd, const std::string &product)
+EncryptedLibReader::EncryptedLibReader(int fd, const unsigned char key_string[16])
   : LibReader(fd),
     cache_(new unsigned char[kCacheSize]), cache_offset_(SIZE_MAX), cache_length_(0) {
-  if (GetKeyTable(product, key_table_) == false) {
-    std::cerr << "ERROR: the specified product '" << product << "' is not supported." << std::endl;
-  }
+  Camellia_Ekeygen(128, key_string, key_table_);
 }
 
 EncryptedLibReader::~EncryptedLibReader() {
   delete [] cache_;
-}
-
-inline unsigned int rotl(unsigned int data, unsigned int bits) {
- return (data << bits) | (data >> (32 - bits));
-}
-
-inline unsigned int rotr(unsigned int data, unsigned int bits) {
- return (data >> bits) | (data << (32 - bits));
 }
 
 size_t EncryptedLibReader::MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void* dest) {
@@ -340,18 +303,17 @@ size_t EncryptedLibReader::MemoryCopy(char *cache, size_t page_no, size_t offset
     cache_offset_ = file_aligned_offset;
     cache_length_ = aligned_length;
 
+    unsigned char block_tmp[16];
+    const unsigned int *p = reinterpret_cast<unsigned int *>(cache + aligned_offset);
+    unsigned int *const q = reinterpret_cast<unsigned int *>(block_tmp);
     for (size_t i = 0; i < aligned_length; i += 16) {
-      unsigned char block_tmp[16];
       int roll_bits = ( ((file_aligned_offset + i) >> 4) & 0x0f ) + 16;
-      unsigned int *p = reinterpret_cast<unsigned int *>(cache + aligned_offset + i);
-      unsigned int *q = reinterpret_cast<unsigned int *>(block_tmp);
-
       q[0] = rotl(p[0], roll_bits);
       q[1] = rotr(p[1], roll_bits);
       q[2] = rotl(p[2], roll_bits);
       q[3] = rotr(p[3], roll_bits);
-
       Camellia_DecryptBlock(128, block_tmp, key_table_, cache_ + i);
+      p += 4;
     }
   }
 
@@ -360,92 +322,70 @@ size_t EncryptedLibReader::MemoryCopy(char *cache, size_t page_no, size_t offset
   return length;
 }
 
-bool EncryptedLibReader::LoadKeyInfo(const std::string &csv) {
-  if (key_info_.empty() == false) return true;
-  std::ifstream ifs(csv);
-  if (ifs.is_open() == false) {
-    std::cerr << "ERROR: cannot open '" << csv << "'." << std::endl;
-    return false;
-  }
-  std::string l;
-  ifs >> l;
-  while (ifs.eof() == false) {
-    ifs >> l;
-    KeyInfo key_info;
-    std::istringstream iss(l);
-    std::getline(iss, key_info.product_name, ',');
-    std::getline(iss, key_info.release_date, ',');
-    std::getline(iss, key_info.key, ',');
+////////////////////////////////////////////////////////////////////////
+// EncryptedLibReader2 Class Function Definitions
+////////////////////////////////////////////////////////////////////////
 
-    if (key_info.key.size() != 16) {
-      if (key_info.key.size() != 32) continue;
-      auto it = key_info.key.cbegin();
-      const auto it_end = key_info.key.cend();
-      for (; it != it_end; ++it) {
-        int c = *it;
-        if ( ('0' <= c && c <= '9') || ('A' <= c && c <= 'F') ||
-             ('a' <= c && c <= 'f') ) continue;
-        else break;
-      }
-      if (it != it_end) continue;
-      for (int i = 0; i < 16; ++i) {
-        std::string s(key_info.key.substr(2*i, 2));
-        key_info.raw_key[i] = static_cast<unsigned char>(std::stoi(s, NULL, 16));
-      }
-      if (IsAsciiKey(key_info.raw_key)) {
-        key_info.key.assign(reinterpret_cast<char *>(key_info.raw_key), 16);
-      }
-    } else {
-      ::memcpy(key_info.raw_key, &key_info.key[0], 16);
-    }
-    key_info_.insert(key_info);
-  }
-  return true;
+EncryptedLibReader2::EncryptedLibReader2(int fd, const unsigned char key_string[16])
+  : LibReader(fd),
+    key_{0}, cache_(new char[kCacheSize]), cache_offset_(SIZE_MAX), cache_length_(0) {
+  ::memcpy(key_, key_string, 16);
 }
 
-void EncryptedLibReader::PrintKeyInfo() {
-  std::cout << "PRODUCT_NAME  RELEASE_DATE  KEY\n"
-            << "------------- ------------- --------------------------------------------------\n";
-  std::cout.setf(std::ios::hex, std::ios::basefield);
-  for (auto it = key_info_.cbegin(); it != key_info_.cend(); ++it) {
-    char fix_product_name[15];
-    size_t fix_product_name_len = std::min(it->product_name.size(), static_cast<size_t>(14));
-    ::memcpy(fix_product_name, &it->product_name[0], fix_product_name_len);
-    fix_product_name[fix_product_name_len] = '\0';
-    std::cout << std::left << std::setfill(' ') << std::setw(14) << fix_product_name;
-    char fix_release_date[15];
-    size_t fix_release_date_len = std::min(it->release_date.size(), static_cast<size_t>(14));
-    if (fix_release_date_len == 8) {
-      // convert 'YYYYMMDD' into 'YYYY/MM/DD'
-      ::memcpy(&fix_release_date[0], &it->release_date[0], 4);
-      fix_release_date[4] = '/';
-      ::memcpy(&fix_release_date[5], &it->release_date[4], 2);
-      fix_release_date[7] = '/';
-      ::memcpy(&fix_release_date[8], &it->release_date[6], 2);
-      fix_release_date_len = 10;
-    } else {
-      ::memcpy(fix_release_date, &it->release_date[0], fix_release_date_len);
-    }
-    fix_release_date[fix_release_date_len] = '\0';
-    std::cout << std::left << std::setfill(' ') << std::setw(14) << fix_release_date;
-    if (IsAsciiKey(it->raw_key) == false) {
-      std::cout << "{ ";
-      const uint32_t *p = reinterpret_cast<const uint32_t *>(it->raw_key);
-      for (int i = 0; ; ) {
-        std::cout << "0x" << std::right << std::setfill('0') << std::setw(8) << p[i];
-        ++i;
-        if (4 <= i) {
-          std::cout << " }\n";
-          break;
+EncryptedLibReader2::~EncryptedLibReader2() {
+  delete [] cache_;
+}
+
+size_t EncryptedLibReader2::MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void* dest) {
+
+  static const unsigned char rotate_table[0x20] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x09,
+    0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x12,
+    0x13, 0x14, 0x15, 0x16, 0x17, 0x19, 0x1A, 0x1B,
+    0x1C, 0x1D, 0x1E, 0x1F, 0x04, 0x0C, 0x14, 0x1C
+  };
+
+  size_t file_offset = page_no * kCacheSize + offset;
+  size_t file_aligned_offset = file_offset & ~0x0f;
+  size_t aligned_offset = file_aligned_offset - (page_no * kCacheSize);
+  size_t aligned_length = (length + (file_offset & 0x0f) + 0x0f) & ~0x0f;
+  assert(aligned_offset + aligned_length <= kCacheSize);
+
+  if (file_aligned_offset != cache_offset_ || aligned_length != cache_length_) {
+    cache_offset_ = file_aligned_offset;
+    cache_length_ = aligned_length;
+    for (size_t i = 0; i < aligned_length; i += 0x10) {
+      const char *p = cache + aligned_offset + i;
+      char *q = cache_ + i;
+      const int d = (aligned_offset + i) & 0xf;
+      const char p_d = p[d];
+      for (int j = 0; j < 0x10; ++j) {
+        char c = p[j];
+        if (d != j) {
+          c ^= p_d;
         }
-        std::cout << ", ";
+        q[j] = c;
       }
-    } else {
-      std::cout << '"' << it->key << "\"\n";
+      const size_t block_ofs = (file_aligned_offset + i) >> 4;
+      unsigned int *q_dw = reinterpret_cast<unsigned int *>(q);
+      const char roll1 = rotate_table[(block_ofs + 0x00) & 0x1f];
+      const char roll2 = rotate_table[(block_ofs + 0x0c) & 0x1f];
+      q_dw[0] = rotr(rotr(key_[0], roll1) ^ q_dw[0], roll2);
+      const char roll3 = rotate_table[(block_ofs + 0x03) & 0x1f];
+      const char roll4 = rotate_table[(block_ofs + 0x0f) & 0x1f];
+      q_dw[1] = rotl(rotl(key_[1], roll3) ^ q_dw[1], roll4);
+      const char roll5 = rotate_table[(block_ofs + 0x06) & 0x1f];
+      const char roll6 = rotate_table[(block_ofs - 0x0e) & 0x1f];
+      q_dw[2] = rotr(rotr(key_[2], roll5) ^ q_dw[2], roll6);
+      const char roll7 = rotate_table[(block_ofs + 0x09) & 0x1f];
+      const char roll8 = rotate_table[(block_ofs - 0x0b) & 0x1f];
+      q_dw[3] = rotl(rotl(key_[3], roll7) ^ q_dw[3], roll8);
     }
   }
-  std::cout << std::endl;
-  std::cout.setf(std::ios::dec, std::ios::basefield);
+
+  ::memcpy(dest, cache_ + (offset & 0x0f), length);
+
+  return length;
 }
 
 } // namespace mlib

@@ -1,4 +1,4 @@
-/* exmaldat.cc (updated on 2016/12/29)
+/* exmaldat.cc (updated on 2017/02/16)
  * Copyright (C) 2016 renny1398.
  *
  * This program is free software; you can redistribute it and/or
@@ -26,8 +26,8 @@
 #include "mlib/extractor.h"
 
 // for test
-#include <cstdlib>
-#include <ctime>
+// #include <cstdlib>
+// #include <ctime>
 
 /*
 bool create_test_data(const char *filename, size_t size) {
@@ -61,7 +61,8 @@ bool create_test_data(const char *filename, size_t size) {
 void print_usage() {
   std::cout << "Usage: exmaldat <product-name> [-dfmwst] <input-file> [-p internal-path]\n"
             << "       [output-directory]\n\n"
-            << "  d  : decrypt an archive, not extract (default: disable)\n"
+            << "  d  : decrypt an archive, not extract. other options are ignored.\n"
+            << "       (default: disable)\n"
             << "  f  : flatten directory structure (default: disable)\n"
             << "  m  : convert mgf into png (default: enable)\n"
             << "  w  : convert webp into png (default: enable on and after SGB)\n"
@@ -184,7 +185,17 @@ bool decrypt(const std::string &product, const std::string& path) {
   if (fd == -1) {
    return false;
   }
-  mlib::LibReader *reader = new mlib::EncryptedLibReader(fd, product);
+  mlib::LibReader *reader;
+  const mlib::KeyInfo *key_info;
+  if (mlib::FindKeyInfo(product, &key_info) == false) {
+    return false;
+  } else if (key_info->cipher_type() == 1) {
+    reader = new mlib::EncryptedLibReader(fd, key_info->key_string());
+  } else if (key_info->cipher_type() == 2) {
+    reader = new mlib::EncryptedLibReader2(fd, key_info->key_string());
+  } else {
+    return false;
+  }
   if (reader == NULL) {
     ::close(fd);
     return false;
@@ -228,7 +239,8 @@ int main(int argc, char **argv) {
   keyinfo_csv.erase(keyinfo_csv.find_last_of('/') + 1);
 #endif
   keyinfo_csv.append("key_info.csv");
-  if (mlib::EncryptedLibReader::LoadKeyInfo(keyinfo_csv) == false) {
+  if (mlib::LoadKeyInfo(keyinfo_csv) == false) {
+    std::cerr << "ERROR: failed to open the key_info file '" << keyinfo_csv << "'." << std::endl;
     return -1;
   }
 
@@ -237,7 +249,7 @@ int main(int argc, char **argv) {
     return -1;
   }
   if (params.product_name == "--list-keys") {
-    mlib::EncryptedLibReader::PrintKeyInfo();
+    mlib::PrintKeyInfo();
     return 0;
   }
 
@@ -255,6 +267,7 @@ int main(int argc, char **argv) {
 
   mlib::MLib *lib = mlib::MLib::Open(params.lib_name, params.product_name);
   if (lib == NULL) {
+    std::cerr << "ERROR: failed to open '" << params.lib_name << "'." << std::endl;
     return -1;
   }
 

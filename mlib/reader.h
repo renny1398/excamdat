@@ -1,6 +1,6 @@
 #pragma once
 
-/* reader.h (updated on 2016/12/29)
+/* reader.h (updated on 2017/02/16)
  * Copyright (C) 2016 renny1398.
  *
  * This program is free software; you can redistribute it and/or
@@ -77,20 +77,34 @@ class UnencryptedLibReader : public LibReader {
 public:
   UnencryptedLibReader(int fd);
 protected:
-  size_t MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void *dest);
+  size_t MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void *dest) override;
 };
 
 class EncryptedLibReader : public LibReader {
 public:
-  EncryptedLibReader(int fd, const std::string &product);
-  ~EncryptedLibReader();
+  EncryptedLibReader(int fd, const unsigned char key_string[16]);
+  ~EncryptedLibReader() override;
   static bool LoadKeyInfo(const std::string &csv);
-  static void PrintKeyInfo();
+  static void PrintKeyTable(const KEY_TABLE_TYPE key_table);
 protected:
-  size_t MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void *dest);
+  size_t MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void *dest) override;
 private:
   KEY_TABLE_TYPE key_table_;
   unsigned char *cache_;
+  size_t cache_offset_;
+  size_t cache_length_;
+};
+
+class EncryptedLibReader2 : public LibReader {
+public:
+  EncryptedLibReader2(int fd, const unsigned char key_string[16]);
+  ~EncryptedLibReader2() override;
+  static bool LoadKeyInfo(const std::string &csv);
+protected:
+  size_t MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void *dest) override;
+private:
+  unsigned int key_[4];
+  char *cache_;
   size_t cache_offset_;
   size_t cache_length_;
 };

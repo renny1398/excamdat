@@ -1,4 +1,4 @@
-/* extractor.cc (updated on 2016/12/29)
+/* extractor.cc (updated on 2017/02/16)
  * Copyright (C) 2016 renny1398.
  *
  * This program is free software; you can redistribute it and/or
@@ -148,7 +148,8 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
   const int lv_max = std::stoi(token);
 
   std::cout << "-- Extracting '" << dzi->GetLocation() << kDelim
-            << dzi->GetName() << "' as PNG file:" << std::endl;
+            << dzi->GetName() << "' as PNG file...";
+  std::cout.flush();
 
   for (int l = 0; l < lv_max; ++l, width >>= 1, height >>= 1) {
     std::getline(ss, token, ',');
@@ -188,14 +189,14 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
             if (tex_file == nullptr) continue;
           }
         }
-        std::cout << " -- Loading " << tex_file->GetName() << "...";
-        std::cout.flush();
+        // std::cout << " -- Loading " << tex_file->GetName() << "...";
+        // std::cout.flush();
         SDL_RWops *rwops = SDL_RWFromMLib(tex_file);
         SDL_Surface *tex_surface = IMG_Load_RW(rwops, 0);
         SDL_BlitSurface(tex_surface, nullptr, surface, &rect);
         SDL_FreeSurface(tex_surface);
         SDL_RWclose(rwops);
-        std::cout << "OK." << std::endl;
+        // std::cout << "OK." << std::endl;
       }
     }
 
@@ -205,7 +206,7 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
       out_name.append(std::to_string(l));
     }
     out_name.append(".png");
-    std::cout << " -- Saving as '" << out_name << "'...";
+    // std::cout << " -- Saving as '" << out_name << "'...";
     std::string out_fullname(fs_path);
     out_fullname.append(1, kDelim);
     out_fullname.append(out_name);
@@ -218,7 +219,7 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
   return true;
 }
 
-bool Extractor::Extract(MLib* mlib, const std::string &fs_path, std::vector<char> &buf) {
+bool Extractor::Extract(MLib *mlib, const std::string &fs_path, std::vector<char> &buf) {
 
   const std::string& entry_name = mlib->GetName();
   std::string fs_path_tmp = fs_path;
@@ -315,7 +316,7 @@ bool Extractor::Extract(MLib* mlib, const std::string &fs_path, std::vector<char
   return true;
 }
 
-bool Extractor::Extract(MLib* mlib, const std::string &lib_path, const std::string &fs_path) {
+bool Extractor::Extract(MLib *mlib, const std::string &lib_path, const std::string &fs_path) {
 
   stop_ = false;
 
@@ -350,7 +351,7 @@ bool Extractor::Extract(MLib* mlib, const std::string &lib_path, const std::stri
   const clock_t clk = ::clock();
   bool ret = Extract(entry, fs_path_tmp, buf);
   if (ret == false) {
-    std::cerr << "Failed to extract files." << std::endl;
+    std::cerr << "ERROR: failed to extract files." << std::endl;
     return ret;
   }
   double elapsed = static_cast<double>(::clock() - clk) / CLOCKS_PER_SEC;

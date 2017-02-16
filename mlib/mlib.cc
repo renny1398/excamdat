@@ -1,4 +1,4 @@
-/* mlib.cc (updated on 2016/12/29)
+/* mlib.cc (updated on 2017/02/16)
  * Copyright (C) 2016 renny1398.
  *
  * This program is free software; you can redistribute it and/or
@@ -22,14 +22,18 @@
 #include <unistd.h>
 #include <ctime>
 #include <cmath>
-#include <algorithm>
 #include <iostream>
+#include <iomanip>
+#include <algorithm>
+#include <sstream>
 #include <fstream>
-#include <boost/make_shared.hpp>
+#include <map>
 #include "mlib.h"
 #include "reader.h"
 
 namespace {
+
+std::map<std::string, mlib::KeyInfo> key_info_;
 
 size_t utf16_to_utf8(const char *src, char *dst) {
   const char *dst_start = dst;
@@ -77,9 +81,12 @@ namespace mlib {
 // MLib Class Function Definitions
 ////////////////////////////////////////////////////////////////////////
 
-MLib::MLib(LibReader *reader) : parent_(NULL), reader_(reader), file_pos_(0) {}
+MLib::MLib(LibReader *reader) : parent_(nullptr), reader_(reader), file_pos_(0) {
+  verbose_= true;
+}
 
 MLib::MLib(MLib *parent) : parent_(parent), reader_(parent->reader_), file_pos_(0) {
+  verbose_ = parent->verbose_;
   location_.assign(parent->location_);
   if (location_.empty() == false) {
 #ifdef _WINDOWS
@@ -106,25 +113,19 @@ MLib::~MLib() {
 
 MLib *MLib::Open(const std::string &filename, const std::string &product) {
   int fd = open(filename.c_str(), O_RDONLY);
-  if (fd == -1) {
-    return NULL;
+  if (fd == -1) return nullptr;
+  LibReader *reader;
+  const KeyInfo *kinfo;
+  if (FindKeyInfo(product, &kinfo) == false || kinfo->cipher_type() == 0) {
+    reader = new UnencryptedLibReader(fd);
+  } else if (kinfo->cipher_type() == 1) {
+    reader = new EncryptedLibReader(fd, kinfo->key_string());
+  } else if (kinfo->cipher_type() == 2) {
+    reader = new EncryptedLibReader2(fd, kinfo->key_string());
+  } else {
+    return nullptr;
   }
-
-  LibReader *reader = new EncryptedLibReader(fd, product);
   char signature[4];
-  reader->Read(0, 4, signature);
-  if (signature[0] == 'L' && signature[1] == 'I' &&
-      signature[2] == 'B') {
-    if (signature[3] == 'P') {
-      return new LIBP_t(reader);
-    }
-    if (signature[3] == 'U') {
-      return new LIBU_t(reader);
-    }
-  }
-  delete reader;
-
-  reader = new UnencryptedLibReader(fd);
   reader->Read(0, 4, signature);
   if (signature[0] == 'L' && signature[1] == 'I' &&
       signature[2] == 'B') {
@@ -137,7 +138,7 @@ MLib *MLib::Open(const std::string &filename, const std::string &product) {
     return new LIB_t(reader);
   }
   delete reader;
-  return NULL;
+  return nullptr;
 }
 
 const std::string &MLib::GetLocation() const {
@@ -154,26 +155,26 @@ MLib *MLib::Parent() {
 
 MLib *MLib::Child(size_t i) {
   if (IsFile()) {
-    return NULL;
+    return nullptr;
   }
   LoadChild();
   if (children_.size() <= i) {
-    return NULL;
+    return nullptr;
   }
   return children_.at(i);
 }
 
 MLib *MLib::Child(const std::string &name) {
   if (IsFile()) {
-    return NULL;
+    return nullptr;
   }
   LoadChild();
-  for (std::vector<MLib*>::iterator it = children_.begin(); it != children_.end(); ++it) {
-    if ((*it)->GetName() == name) {
-      return *it;
+  for (const auto &p_child : children_) {
+    if (p_child->GetName() == name) {
+      return p_child;
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 void MLib::LoadChild() {
@@ -187,7 +188,6 @@ void MLib::AppendChild(MLib *child) {
 }
 
 MLib *MLib::GetEntry(const std::string &path, size_t index) {
-
 #ifdef _WINDOWS
   const size_t delim_pos = path.find_first_of('\\', index);
 #else
@@ -205,17 +205,17 @@ MLib *MLib::GetEntry(const std::string &path, size_t index) {
   if (IsFile()) {
     if (target_entry_name == ".") {
       MLib *parent = Parent();
-      if (parent == NULL) return NULL;
+      if (parent == nullptr) return nullptr;
       return parent->GetEntry(path, sub_index);
     }
     if (target_entry_name == "..") {
       MLib *parent = Parent();
-      if (parent == NULL) return NULL;
+      if (parent == nullptr) return nullptr;
       parent = parent->Parent();
-      if (parent == NULL) return NULL;
+      if (parent == nullptr) return nullptr;
       return parent->GetEntry(path, sub_index);
     }
-    return NULL;
+    return nullptr;
   }
 
   if (target_entry_name == ".") {
@@ -226,8 +226,8 @@ MLib *MLib::GetEntry(const std::string &path, size_t index) {
   }
 
   MLib *child = Child(target_entry_name);
-  if (child == NULL) {
-    return NULL;
+  if (child == nullptr) {
+    return nullptr;
   }
   return child->GetEntry(path, sub_index);
 }
@@ -284,7 +284,7 @@ off_t MLib::Seek(off_t new_pos, int whence) {
 
 void MLib::List(const std::string &path) const {
   MLib *entry = const_cast<MLib*>(this)->GetEntry(path);
-  if (entry == NULL) {
+  if (entry == nullptr) {
     std::cerr << path << ": invalid path." << std::endl;
     return;
   }
@@ -456,6 +456,107 @@ off_t LIBP_t::GetFileBaseOffset() const {
   base_offset *= 1024;
   base_offset += shobj_->data_base_offset_;
   return base_offset;
+}
+
+////////////////////////////////////////////////////////////////////////
+// Key Load Functions
+////////////////////////////////////////////////////////////////////////
+
+bool LoadKeyInfo(const std::string &csv) {
+  std::ifstream ifs(csv);
+  if (ifs.is_open() == false) return false;
+  std::string l, product, rel_date, key, type;
+  ifs >> l; // "PRODUCT_NAME,RELEASE_DATE,KEY_STRING,CIPHER_TYPE
+  KeyInfo info;
+  while (ifs.eof() == false) {
+    ifs >> l;
+    std::istringstream iss(l);
+    std::getline(iss, product, ',');
+    std::getline(iss, rel_date, ',');
+    std::getline(iss, key, ',');
+    std::getline(iss, type, ',');
+    if (key.size() != 16) {
+      if (key.size() != 32) continue;
+      bool is_raw = false;
+      for (const auto& c : key) {
+        if ( ('0' <= c && c <= '9') || ('A' <= c && c <= 'F') ||
+             ('a' <= c && c <= 'f') ) continue;
+        else {
+          is_raw = true;
+          break;
+        }
+      }
+      if (is_raw) continue;
+      for (int i = 0; i < 16; ++i) {
+        std::string s(key.substr(2*i, 2));
+        info.key_string_[i] = static_cast<unsigned char>(std::stoi(s, nullptr, 16));
+      }
+    } else {
+      ::memcpy(info.key_string_, key.c_str(), 16);
+    }
+    info.cipher_type_ = std::stoi(type, nullptr, 10);
+    key_info_.insert(std::make_pair(product, info));
+  }
+  return true;
+}
+
+bool FindKeyInfo(const std::string &product, const KeyInfo **dest) {
+  if (dest == nullptr) return false;
+  const auto it_key = key_info_.find(product);
+  if (it_key != std::end(key_info_)) {
+    *dest = &it_key->second;
+    return true;
+  }
+  return false;
+}
+
+void PrintKeyInfo() {
+  if (key_info_.empty()) return;
+  std::cout << " PRODUCT   KEY_STRING                                           CIPHER_TYPE\n"
+            << "--------- ---------------------------------------------------- -------------\n";
+  std::cout.setf(std::ios::hex, std::ios::basefield);
+  for (auto it = std::begin(key_info_); it != std::end(key_info_); ++it) {
+    char fix_product_name[7+1];
+    size_t fix_product_name_len = std::min(it->first.size(), static_cast<size_t>(7));
+    ::memcpy(fix_product_name, it->first.c_str(), fix_product_name_len);
+    fix_product_name[fix_product_name_len] = '\0';
+    std::cout << ' ' << std::left << std::setfill(' ') << std::setw(7) << fix_product_name;
+    std::cout << "   ";
+    if (it->second.IsAsciiKey() == false) {
+      std::cout << "{ ";
+      const uint32_t *p = reinterpret_cast<const uint32_t *>(it->second.key_string());
+      for (int i = 0; ; ) {
+        std::cout << "0x" << std::right << std::setfill('0') << std::setw(8) << p[i];
+        ++i;
+        if (4 <= i) {
+          std::cout << " }   ";
+          break;
+        }
+        std::cout << ", ";
+      }
+    } else {
+      char key_str[17];
+      ::memcpy(key_str, it->second.key_string(), 16);
+      key_str[16] = '\0';
+      std::cout << '"' << key_str << "\"                                " << "   ";
+    }
+    switch (it->second.cipher_type()) {
+    case 0:
+      std::cout << "Plain";
+      break;
+    case 1:
+      std::cout << "Camellia128";
+      break;
+    case 2:
+      std::cout << ">= SLT";
+      break;
+    default:
+      std::cout << "Unknown";
+    }
+    std::cout << std::endl;
+  }
+  std::cout.setf(std::ios::dec, std::ios::basefield);
+  std::cout << std::endl;
 }
 
 } // namespace mlib
