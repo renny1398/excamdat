@@ -28,6 +28,7 @@
 #include <sstream>
 #include <fstream>
 #include <map>
+#include <stdexcept>
 #include "mlib.h"
 #include "reader.h"
 
@@ -112,19 +113,8 @@ MLib::~MLib() {
 }
 
 MLib *MLib::Open(const std::string &filename, const std::string &product) {
-  int fd = open(filename.c_str(), O_RDONLY);
-  if (fd == -1) return nullptr;
-  LibReader *reader;
-  const KeyInfo *kinfo;
-  if (FindKeyInfo(product, &kinfo) == false || kinfo->cipher_type() == 0) {
-    reader = new UnencryptedLibReader(fd);
-  } else if (kinfo->cipher_type() == 1) {
-    reader = new EncryptedLibReader(fd, kinfo->key_string());
-  } else if (kinfo->cipher_type() == 2) {
-    reader = new EncryptedLibReader2(fd, kinfo->key_string());
-  } else {
-    return nullptr;
-  }
+  LibReader *reader = CreateReader(filename, product);
+  if (reader == nullptr) return nullptr;
   char signature[4];
   reader->Read(0, 4, signature);
   if (signature[0] == 'L' && signature[1] == 'I' &&
@@ -408,6 +398,9 @@ off_t LIBU_t::GetFileBaseOffset() const {
 
 LIBP_t::SharedObject::SharedObject(LibReader *reader) {
 
+  static_assert(sizeof(LIBPHDR) == 16, "size of LIBPHDR must be 16");
+  static_assert(sizeof(LIBPENTRY) == 32, "size of LIBPENTRY must be 32");
+
   size_t data_base_offset = reader->Read(0, sizeof(LIBPHDR), &hdr_);
 
   entries_.assign(hdr_.entry_count, LIBPENTRY());
@@ -423,14 +416,19 @@ LIBP_t::LIBP_t(LibReader *reader)
   : MLib(reader), shobj_(new SharedObject(reader)), entry_index_(0), name_(shobj_->entries_.at(0).file_name) {}
 
 LIBP_t::LIBP_t(const boost::shared_ptr<SharedObject> &shobj, LIBP_t* parent, unsigned int entry_index)
-  : MLib(parent), shobj_(shobj), entry_index_(entry_index), name_(shobj_->entries_.at(entry_index).file_name) {}
+  : MLib(parent), shobj_(shobj), entry_index_(entry_index), name_(shobj_->entries_.at(entry_index).file_name) {
+  if (shobj_->entries_.at(entry_index).flags & LIBPENTRY::kFlagFile2) {
+    std::cout << "[DEBUG] file flag of '" << name_ << "' is 0x20000." << std::endl;
+  }
+}
 
 const std::string &LIBP_t::GetName() const {
   return name_;
 }
 
 bool LIBP_t::IsFile() const {
-  return (shobj_->entries_[entry_index_].flags & LIBPENTRY::kFlagFile);
+  const unsigned int &flags = shobj_->entries_[entry_index_].flags;
+  return (flags & (LIBPENTRY::kFlagFile | LIBPENTRY::kFlagFile2));
 }
 
 unsigned int LIBP_t::GetFileSize() const {
@@ -445,8 +443,23 @@ unsigned int LIBP_t::GetChildNumber() const {
 
 void LIBP_t::DoLoadChild() {
   const unsigned int num = GetChildNumber();
-  for (unsigned int i = 0; i < num; ++i) {
-    AppendChild(new LIBP_t(shobj_, this, shobj_->entries_.at(entry_index_).offset_index + i));
+  try {
+    LIBPENTRY &entry = shobj_->entries_.at(entry_index_);
+    for (unsigned int i = 0; i < num; ++i) {
+      unsigned int child_entry_index = entry.offset_index + i;
+      if (shobj_->hdr_.entry_count <= child_entry_index) {
+        std::cerr << "ERROR: entry index " << child_entry_index
+                  << " is greater than or equal to entry number.\n(entry number: "
+                  << shobj_->hdr_.entry_count << ", current entry name: "
+                  << entry.file_name << ')' << std::endl;
+        std::exit(-1);
+      }
+      AppendChild(new LIBP_t(shobj_, this, child_entry_index));
+    }
+  } catch (std::out_of_range &e) {
+    std::cerr << "ERROR: invalid entry index of LIBP. (entry index: " << entry_index_
+              << ", name: " << name_ << ')' << std::endl;
+    std::exit(-1);
   }
 }
 
@@ -456,6 +469,26 @@ off_t LIBP_t::GetFileBaseOffset() const {
   base_offset *= 1024;
   base_offset += shobj_->data_base_offset_;
   return base_offset;
+}
+
+////////////////////////////////////////////////////////////////////////
+// LibReader Create Functions
+////////////////////////////////////////////////////////////////////////
+
+LibReader *CreateReader(const std::string &filename, const std::string &product) {
+  int fd = ::open(filename.c_str(), O_RDONLY);
+  if (fd == -1) return nullptr;
+  const KeyInfo *kinfo;
+  if (FindKeyInfo(product, &kinfo) == false ||
+      kinfo->cipher_type() == CipherType::kCipherNone) {
+    return new UnencryptedLibReader(fd);
+  } else if (kinfo->cipher_type() == CipherType::kCipherCamellia128) {
+    return new EncryptedLibReader(fd, kinfo->key_string());
+  } else if (kinfo->cipher_type() == CipherType::kCipherEqualMoreThanSLT) {
+    return new EncryptedLibReader2(fd, kinfo->key_string());
+  }
+  ::close(fd);
+  return nullptr;
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -541,13 +574,13 @@ void PrintKeyInfo() {
       std::cout << '"' << key_str << "\"                                " << "   ";
     }
     switch (it->second.cipher_type()) {
-    case 0:
+    case CipherType::kCipherNone:
       std::cout << "Plain";
       break;
-    case 1:
+    case CipherType::kCipherCamellia128:
       std::cout << "Camellia128";
       break;
-    case 2:
+    case CipherType::kCipherEqualMoreThanSLT:
       std::cout << ">= SLT";
       break;
     default:

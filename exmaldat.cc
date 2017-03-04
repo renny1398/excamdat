@@ -25,39 +25,6 @@
 #include "mlib/reader.h"
 #include "mlib/extractor.h"
 
-// for test
-// #include <cstdlib>
-// #include <ctime>
-
-/*
-bool create_test_data(const char *filename, size_t size) {
-  std::ofstream ofs(filename);
-  if (ofs.is_open() == false) {
-    return false;
-  }
-
-  std::srand(std::time(0));
-
-  char ch;
-  std::locale loc;
-
-  for (size_t i = 0; i < size; ++i) {
-    if (i % 512 == 511) {
-      ch = '\n';
-    } else {
-      do {
-        ch = std::rand() & 0x7f;
-        if (std::isalnum(ch, loc) || std::ispunct(ch, loc)) break;
-      } while (true);
-    }
-    ofs.write(&ch, 1);
-  }
-
-  ofs.close();
-  return true;
-}
-*/
-
 void print_usage() {
   std::cout << "Usage: exmaldat <product-name> [-dfmwst] <input-file> [-p internal-path]\n"
             << "       [output-directory]\n\n"
@@ -92,7 +59,7 @@ struct Parameters {
 };
 
 bool get_param(int argc, char **argv, Parameters *params) {
-  if (params == NULL) return false;
+  if (params == nullptr) return false;
   params->product_name.assign(argv[1]);
   for (int i = 2; i < argc; ++i) {
     std::string p = argv[i];
@@ -181,28 +148,20 @@ bool get_param(int argc, char **argv, Parameters *params) {
 }
 
 bool decrypt(const std::string &product, const std::string& path) {
-  int fd = ::open(path.c_str(), O_RDONLY);
-  if (fd == -1) {
-   return false;
+  // create reader
+  mlib::LibReader *reader = mlib::CreateReader(path, product);
+  if (reader == nullptr) return false;
+  // specify output file name
+  size_t ext_pos = path.find_last_of('.');
+  std::string decrypted_filename(path.substr(0, ext_pos));
+  decrypted_filename.append(".decrypted");
+  if (ext_pos != std::string::npos) {
+    decrypted_filename.append(path.substr(ext_pos));
   }
-  mlib::LibReader *reader;
-  const mlib::KeyInfo *key_info;
-  if (mlib::FindKeyInfo(product, &key_info) == false) {
-    return false;
-  } else if (key_info->cipher_type() == 1) {
-    reader = new mlib::EncryptedLibReader(fd, key_info->key_string());
-  } else if (key_info->cipher_type() == 2) {
-    reader = new mlib::EncryptedLibReader2(fd, key_info->key_string());
-  } else {
-    return false;
-  }
-  if (reader == NULL) {
-    ::close(fd);
-    return false;
-  }
+  // decrypt MLib and write decrypted MLib
   const size_t size = reader->GetSize();
   char *buf = new char[65536];
-  std::ofstream ofs("decrypted.dat");
+  std::ofstream ofs(decrypted_filename);
   for (size_t i = 0; i < size; i += 65536) {
     size_t read_size = 65536;
     if (size - i < 65536) {
@@ -214,6 +173,7 @@ bool decrypt(const std::string &product, const std::string& path) {
   }
   ofs.close();
   delete [] buf;
+  int fd = reader->fd();
   delete reader;
   ::close(fd);
   return true;
@@ -266,7 +226,7 @@ int main(int argc, char **argv) {
   }
 
   mlib::MLib *lib = mlib::MLib::Open(params.lib_name, params.product_name);
-  if (lib == NULL) {
+  if (lib == nullptr) {
     std::cerr << "ERROR: failed to open '" << params.lib_name << "'." << std::endl;
     return -1;
   }

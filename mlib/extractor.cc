@@ -138,84 +138,88 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
   dzi_ptr += 3;
   while (::isspace(*dzi_ptr)) { ++dzi_ptr; }
 
-  std::istringstream ss(dzi_ptr);
-  std::string token;
-  std::getline(ss, token, ',');
-  int width = std::stoi(token);
-  std::getline(ss, token);
-  int height = std::stoi(token);
-  std::getline(ss, token);
-  const int lv_max = std::stoi(token);
-
   std::cout << "-- Extracting '" << dzi->GetLocation() << kDelim
             << dzi->GetName() << "' as PNG file...";
   std::cout.flush();
 
-  for (int l = 0; l < lv_max; ++l, width >>= 1, height >>= 1) {
+  try {
+    std::istringstream ss(dzi_ptr);
+    std::string token;
     std::getline(ss, token, ',');
-    const int cols = std::stoi(token);
+    int width = std::stoi(token);
     std::getline(ss, token);
-    const int rows = std::stoi(token);
+    int height = std::stoi(token);
+    std::getline(ss, token);
+    const int lv_max = std::stoi(token);
 
-    if (0 <= texlv_ && l != texlv_) {
-      for (int i = 0; i < rows; ++i) {
-        std::getline(ss, token);
-      }
-      continue;
-    }
-
-    SDL_Surface *surface = SDL_CreateRGBSurface(0, width, height, 32,
-                                                0x0000ff00, 0x00ff0000, 0xff000000, 0x000000ff);
-    for (int i = 0; i < 256 * rows; i += 256) {
-      const int tex_height = std::min(256, height - i);
+    for (int l = 0; l < lv_max; ++l, width >>= 1, height >>= 1) {
+      std::getline(ss, token, ',');
+      const int cols = std::stoi(token);
       std::getline(ss, token);
-      std::istringstream ss_col(token);
-      for (int j = 0; j < 256 * cols; j += 256) {
-        const int tex_width = std::min(256, width - j);
-        SDL_Rect rect = { j, i, tex_width, tex_height };
-        std::string tex_name;
-        std::getline(ss_col, tex_name, ',');
-        if (tex_name.back() == '\n') { tex_name.pop_back(); }
-        if (tex_name.back() == '\r') { tex_name.pop_back(); }
-#ifndef _WINDOWS
-        std::replace(tex_name.begin(), tex_name.end(), '\\', '/');
-#endif
-        if (tex_name.empty()) continue;
-        MLib *tex_file = tex_entry->GetEntry(tex_name + ".mgf");
-        if (tex_file == nullptr) {
-          tex_file = tex_entry->GetEntry(tex_name + ".png");
-          if (tex_file == nullptr) {
-            tex_file = tex_entry->GetEntry(tex_name + ".webp");
-            if (tex_file == nullptr) continue;
-          }
+      const int rows = std::stoi(token);
+
+      if (0 <= texlv_ && l != texlv_) {
+        for (int i = 0; i < rows; ++i) {
+          std::getline(ss, token);
         }
-        // std::cout << " -- Loading " << tex_file->GetName() << "...";
-        // std::cout.flush();
-        SDL_RWops *rwops = SDL_RWFromMLib(tex_file);
-        SDL_Surface *tex_surface = IMG_Load_RW(rwops, 0);
-        SDL_BlitSurface(tex_surface, nullptr, surface, &rect);
-        SDL_FreeSurface(tex_surface);
-        SDL_RWclose(rwops);
-        // std::cout << "OK." << std::endl;
+        continue;
       }
-    }
 
-    std::string out_name(out_name_base);
-    if (texlv_ < 0) {
-      out_name.append(1, '_');
-      out_name.append(std::to_string(l));
+      SDL_Surface *surface = SDL_CreateRGBSurface(0, width, height, 32,
+                                                  0x0000ff00, 0x00ff0000, 0xff000000, 0x000000ff);
+      for (int i = 0; i < 256 * rows; i += 256) {
+        const int tex_height = std::min(256, height - i);
+        std::getline(ss, token);
+        std::istringstream ss_col(token);
+        for (int j = 0; j < 256 * cols; j += 256) {
+          const int tex_width = std::min(256, width - j);
+          SDL_Rect rect = { j, i, tex_width, tex_height };
+          std::string tex_name;
+          std::getline(ss_col, tex_name, ',');
+          if (tex_name.back() == '\n') { tex_name.pop_back(); }
+          if (tex_name.back() == '\r') { tex_name.pop_back(); }
+  #ifndef _WINDOWS
+          std::replace(tex_name.begin(), tex_name.end(), '\\', '/');
+  #endif
+          if (tex_name.empty()) continue;
+          MLib *tex_file = tex_entry->GetEntry(tex_name + ".mgf");
+          if (tex_file == nullptr) {
+            tex_file = tex_entry->GetEntry(tex_name + ".png");
+            if (tex_file == nullptr) {
+              tex_file = tex_entry->GetEntry(tex_name + ".webp");
+              if (tex_file == nullptr) continue;
+            }
+          }
+          // std::cout << " -- Loading " << tex_file->GetName() << "...";
+          // std::cout.flush();
+          SDL_RWops *rwops = SDL_RWFromMLib(tex_file);
+          SDL_Surface *tex_surface = IMG_Load_RW(rwops, 0);
+          SDL_BlitSurface(tex_surface, nullptr, surface, &rect);
+          SDL_FreeSurface(tex_surface);
+          SDL_RWclose(rwops);
+          // std::cout << "OK." << std::endl;
+        }
+      }
+
+      std::string out_name(out_name_base);
+      if (texlv_ < 0) {
+        out_name.append(1, '_');
+        out_name.append(std::to_string(l));
+      }
+      out_name.append(".png");
+      // std::cout << " -- Saving as '" << out_name << "'...";
+      std::string out_fullname(fs_path);
+      out_fullname.append(1, kDelim);
+      out_fullname.append(out_name);
+      IMG_SavePNG(surface, out_fullname.c_str());
+      SDL_FreeSurface(surface);
+      std::cout << "OK." << std::endl;
+      if (l == texlv_) break;
     }
-    out_name.append(".png");
-    // std::cout << " -- Saving as '" << out_name << "'...";
-    std::string out_fullname(fs_path);
-    out_fullname.append(1, kDelim);
-    out_fullname.append(out_name);
-    IMG_SavePNG(surface, out_fullname.c_str());
-    SDL_FreeSurface(surface);
-    std::cout << "OK." << std::endl;
-    if (l == texlv_) break;
+  } catch (std::invalid_argument &e) {
+    std::cout << "Skipped because this file is wrong." << std::endl;
+    return false;
   }
-
   return true;
 }
 

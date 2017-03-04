@@ -26,6 +26,18 @@
 namespace mlib {
 
 ////////////////////////////////////////////////////////////////////////
+/// \brief CipherType Enumerate
+////////////////////////////////////////////////////////////////////////
+
+enum CipherType : int {
+  kCipherNone = 0,
+  kCipherCamellia128 = 1,
+  kCipherEqualMoreThanSLT = 2,
+  kCipherOther = 3,
+  kCipherFalse = -2
+};
+
+////////////////////////////////////////////////////////////////////////
 /// \brief KeyInfo class
 ////////////////////////////////////////////////////////////////////////
 
@@ -109,7 +121,7 @@ private:
 
 class LIB_t : public MLib {
 public:
-  LIB_t(LibReader *reader);
+  explicit LIB_t(LibReader *reader);
 
   const std::string &GetName() const;
   bool IsFile() const;
@@ -150,7 +162,7 @@ private:
 
 class LIBU_t : public MLib {
 public:
-  LIBU_t(LibReader *reader);
+  explicit LIBU_t(LibReader *reader);
 
   const std::string &GetName() const;
   bool IsFile() const;
@@ -191,7 +203,7 @@ private:
 
 class LIBP_t : public MLib {
 public:
-  LIBP_t(LibReader *reader);
+  explicit LIBP_t(LibReader *reader);
 
   const std::string &GetName() const;
   bool IsFile() const;
@@ -217,6 +229,7 @@ private:
     unsigned int offset_index;
     unsigned int length;
     static const int kFlagFile = 0x10000;
+    static const int kFlagFile2 = 0x20000;
   };
 
   struct SharedObject {
@@ -225,7 +238,7 @@ private:
     std::vector<unsigned int> file_offsets_;
     size_t data_base_offset_;
   public:
-    SharedObject(LibReader *reader);
+    explicit SharedObject(LibReader *reader);
   };
 
   LIBP_t(const boost::shared_ptr<SharedObject> &shobj, LIBP_t *parent, unsigned int entry_index);
@@ -239,6 +252,7 @@ private:
 /// \brief mlib common functions
 ////////////////////////////////////////////////////////////////////////
 
+LibReader *CreateReader(const std::string &filename, const std::string& product);
 bool LoadKeyInfo(const std::string &csv);
 bool FindKeyInfo(const std::string &product, const KeyInfo **dest);
 void PrintKeyInfo();

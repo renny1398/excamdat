@@ -50,6 +50,8 @@ private:
 
   static void *LoadEntry(void *args);
 
+  friend class MLibReaderTest;
+
   int fd_;
   size_t file_size_;
 
