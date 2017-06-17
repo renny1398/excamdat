@@ -42,12 +42,12 @@ public:
     return true;
   }
 
-  bool Extract(MLib* mlib, const std::string &lib_path, const std::string &fs_path);
+  bool Extract(const MLibPtr &mlib, const std::string &lib_path, const std::string &fs_path);
   void Stop() { stop_ = true; }
 
 protected:
-  bool Extract(MLib* mlib, const std::string &fs_path, std::vector<char> &buf);
-  bool TexCat(MLib* dzi, MLib* tex_entry, const std::string &fs_path, std::vector<char> &buf);
+  bool Extract(const MLibPtr &mlib, const std::string &fs_path, std::vector<char> &buf);
+  bool TexCat(const MLibPtr &dzi, const MLibPtr &tex_entry, const std::string &fs_path, std::vector<char> &buf);
 
 private:
   static const char kDelim;

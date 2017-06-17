@@ -13,6 +13,7 @@ set(CMAKE_BUILD_TYPE RelWithDebInfo)
 
 add_subdirectory(mlib)
 add_subdirectory(PeLib)
+add_subdirectory(tool)
 add_subdirectory(test)
 
 link_directories(/usr/local/lib)

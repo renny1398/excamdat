@@ -19,6 +19,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cassert>
 #include <SDL.h>
 #include <SDL_image.h>
 #include <iostream>
@@ -71,7 +72,7 @@ int sdl_custom_close(struct SDL_RWops */*context*/) {
   return 0;
 }
 
-SDL_RWops *SDL_RWFromMLib(mlib::MLib* mlib) {
+SDL_RWops *SDL_RWFromMLib(const mlib::MLibPtr &mlib) {
   SDL_RWops *rwops;
   rwops = SDL_AllocRW();
   if (rwops) {
@@ -81,7 +82,7 @@ SDL_RWops *SDL_RWFromMLib(mlib::MLib* mlib) {
     rwops->write = &sdl_custom_write;
     rwops->close = &sdl_custom_close;
     rwops->type = SDL_RWOPS_UNKNOWN;
-    rwops->hidden.unknown.data1 = mlib;
+    rwops->hidden.unknown.data1 = mlib.get();
     if (8 <= mlib->GetFileSize()) {
       char buf[8];
       mlib->Seek(0, SEEK_SET);
@@ -119,7 +120,7 @@ void Extractor::Finalize() {
   IMG_Quit();
 }
 
-bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, std::vector<char> &buf) {
+bool Extractor::TexCat(const MLibPtr &dzi, const MLibPtr &tex_entry, const std::string &fs_path, std::vector<char> &buf) {
   const unsigned int dzi_size = dzi->GetFileSize();
   std::vector<char> dzi_buf(dzi_size + 1, 0);
   char *dzi_ptr = &dzi_buf[0];
@@ -182,7 +183,7 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
           std::replace(tex_name.begin(), tex_name.end(), '\\', '/');
   #endif
           if (tex_name.empty()) continue;
-          MLib *tex_file = tex_entry->GetEntry(tex_name + ".mgf");
+          MLibPtr tex_file = tex_entry->GetEntry(tex_name + ".mgf");
           if (tex_file == nullptr) {
             tex_file = tex_entry->GetEntry(tex_name + ".png");
             if (tex_file == nullptr) {
@@ -223,7 +224,7 @@ bool Extractor::TexCat(MLib *dzi, MLib *tex_entry, const std::string &fs_path, s
   return true;
 }
 
-bool Extractor::Extract(MLib *mlib, const std::string &fs_path, std::vector<char> &buf) {
+bool Extractor::Extract(const MLibPtr &mlib, const std::string &fs_path, std::vector<char> &buf) {
 
   const std::string& entry_name = mlib->GetName();
   std::string fs_path_tmp = fs_path;
@@ -291,19 +292,19 @@ bool Extractor::Extract(MLib *mlib, const std::string &fs_path, std::vector<char
     fs_path_tmp.push_back(kDelim);
   }
 
-  MLib *tex_entry = NULL;
+  MLibPtr tex_entry;
   if (texcat_) {
     tex_entry = mlib->Child("tex");
   }
   const unsigned int child_number = mlib->GetChildNumber();
   for (unsigned int i = 0; stop_ == false && i < child_number; ++i) {
-    MLib *child = mlib->Child(i);
+    MLibPtr child = mlib->Child(i);
     const std::string &child_name = child->GetName();
     size_t child_name_ext_index = child_name.find_last_of(".");
     const std::string child_ext =
         (child_name_ext_index == std::string::npos) ? "" :
         child_name.substr(child_name.find_last_of("."));
-    assert(child != NULL);
+    assert(child.use_count());
     if (child == tex_entry ||
         (svg_ == false && child_ext == ".svg")) {
       std::cout << "-- Skip '" << mlib->GetLocation() << kDelim
@@ -320,11 +321,11 @@ bool Extractor::Extract(MLib *mlib, const std::string &fs_path, std::vector<char
   return true;
 }
 
-bool Extractor::Extract(MLib *mlib, const std::string &lib_path, const std::string &fs_path) {
+bool Extractor::Extract(const MLibPtr &mlib, const std::string &lib_path, const std::string &fs_path) {
 
   stop_ = false;
 
-  MLib *entry = mlib->GetEntry(lib_path);
+  MLibPtr entry = mlib->GetEntry(lib_path);
   if (entry == NULL) {
     return false;
   }

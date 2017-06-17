@@ -18,6 +18,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <iostream>
@@ -225,7 +226,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  mlib::MLib *lib = mlib::MLib::Open(params.lib_name, params.product_name);
+  mlib::MLibPtr lib = mlib::MLib::Open(params.lib_name, params.product_name);
   if (lib == nullptr) {
     std::cerr << "ERROR: failed to open '" << params.lib_name << "'." << std::endl;
     return -1;
@@ -243,7 +244,7 @@ int main(int argc, char **argv) {
   ::signal(SIGINT, &signal_handler);
   extractor.Extract(lib, params.internal_path, params.output_directory);
 
-  delete lib;
+  lib.reset();
 
   mlib::Extractor::Finalize();
 
