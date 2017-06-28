@@ -422,10 +422,14 @@ private:
 /// \brief mlib common functions
 ////////////////////////////////////////////////////////////////////////
 
+size_t UTF16ToUTF8(const char *src, char *dst);
+std::string UTF16ToUTF8(const char16_t *src, size_t length);
+std::string UTF16ToUTF8(const std::u16string &src);
 std::string GenerateFullPath(const std::string &path);
 LibReader *CreateReader(const std::string &filename, const std::string& product);
 bool LoadKeyInfo(const std::string &csv);
 bool FindKeyInfo(const std::string &product, const KeyInfo **dest);
 void PrintKeyInfo();
+unsigned int GetDataAlignment(const std::string &product);
 
 } //namespace mlib

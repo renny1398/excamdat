@@ -27,7 +27,7 @@
 #include "mlib/extractor.h"
 
 void print_usage() {
-  std::cout << "Usage: exmaldat <product-name> [-dfmwst] <input-file> [-p internal-path]\n"
+  std::cout << "Usage: exmaldat <product-name> [-dfmwstv] <input-file> [-p internal-path]\n"
             << "       [output-directory]\n\n"
             << "  d  : decrypt an archive, not extract. other options are ignored.\n"
             << "       (default: disable)\n"
@@ -39,6 +39,7 @@ void print_usage() {
             << "  t0 : as for -t, but extract level 0 textures only (default: enable)\n"
             << "  t1 : as for -t, but extract level 1 textures only (default: disable)\n"
             << "  t2 : as for -t, but extract level 2 textures only (default: disable)\n"
+            << "  v  : verbose (default: disable)\n"
             << std::endl;
 }
 
@@ -47,6 +48,7 @@ struct Parameters {
   std::string lib_name;
   std::string internal_path;
   std::string output_directory;
+  bool verbose;
   bool decrypt;
   bool flatten;
   bool mgf2png;
@@ -55,7 +57,7 @@ struct Parameters {
   bool texcat;
   int tex_level;
   Parameters()
-    : decrypt(false), flatten(false), mgf2png(true), webp2png(true),
+    : verbose(false), decrypt(false), flatten(false), mgf2png(true), webp2png(true),
       skip_svg(false), texcat(true), tex_level(0) {}
 };
 
@@ -78,6 +80,9 @@ bool get_param(int argc, char **argv, Parameters *params) {
     if (*it == '-') {
       for (++it; it != it_end; ++it) {
         switch (*it) {
+        case 'v':
+          params->verbose = true;
+          break;
         case 'd':
           params->decrypt = true;
           break;

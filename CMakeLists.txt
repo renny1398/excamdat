@@ -9,7 +9,8 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -W -Wall -std=c++11 -finline-functions
 set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -g -W -Wall")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -W -Wall -std=c++11")
 
-set(CMAKE_BUILD_TYPE RelWithDebInfo)
+set(CMAKE_BUILD_TYPE Debug)
+#set(CMAKE_BUILD_TYPE RelWithDebInfo)
 
 add_subdirectory(mlib)
 add_subdirectory(PeLib)

@@ -1,5 +1,5 @@
-/* mlib.cc (updated on 2017/02/16)
- * Copyright (C) 2016 renny1398.
+/* mlib.cc (updated on 2017/06/28)
+ * Copyright (C) 2017 renny1398.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,6 +30,8 @@
 #include <sstream>
 #include <fstream>
 #include <map>
+#include <locale>
+#include <codecvt>
 #include <stdexcept>
 #include "mlib.h"
 #include "reader.h"
@@ -37,44 +39,6 @@
 namespace {
 
 std::map<std::string, mlib::KeyInfo> key_info_;
-
-size_t utf16_to_utf8(const char *src, char *dst) {
-  const char *dst_start = dst;
-  for (unsigned long s = 0; ; src += 2) {
-    unsigned long n = src[1] * 0x100 + src[0];
-    if (n == 0L) break;
-    if (n <= 0x7f) {
-      dst[0] = src[0];
-      ++dst;
-      continue;
-    }
-    if (n <= 0x7ff) {
-      dst[0] = 0xc0 | (n >> 6);
-      dst[1] = 0x80 | (n & 0x3f);
-      dst += 2;
-      continue;
-    }
-    if (0xd800 <= n && n <= 0xdbff) {
-      s = n;
-      continue;
-    }
-    if (0xdc00 <= n && n <= 0xdfff) {
-      n = (s - 0xd800) * 0x400 + (n - 0xdc00) + 0x10000;
-      dst[0] = 0xf0 | ((n >> 18) & 0x07);
-      dst[1] = 0x80 | ((n >> 12) & 0x3f);
-      dst[2] = 0x80 | ((n >> 6) & 0x3f);
-      dst[3] = 0x80 | (n & 0x3f);
-      dst += 4;
-      continue;
-    }
-    dst[0] = 0xe0 | ((n >> 12) & 0x0f);
-    dst[1] = 0x80 | ((n >> 6) & 0x3f);
-    dst[2] = 0x80 | (n & 0x3f);
-    dst += 3;
-  }
-  dst[0] = '\0';
-  return dst - dst_start;
-}
 
 bool GetVersionedMLibEntry(const std::string &mlib_name, const std::string &product,
                            const std::string &mlib_internal_path,
@@ -141,7 +105,7 @@ const std::string MLib::FormatOldStylePath(const std::string &mlib,
 
 MLib::MLib(const std::string &lib_name, LibReader *reader)
   : parent_(), libname_(GenerateFullPath(lib_name)), reader_(reader), file_pos_(0) {
-  verbose_= false;
+  verbose_= true;
   if (IsVerbose()) {
     std::cout << "[Info] MLib: opened and set fd " << reader->fd() << "." << std::endl;
   }
@@ -185,11 +149,12 @@ MLibPtr MLib::Open(const std::string &filename, const std::string &product) {
   if (reader == nullptr) return nullptr;
   char signature[4];
   reader->Read(0, 4, signature);
-  MLibPtr ret = MLibPtr();
+  MLibPtr ret;
   if (signature[0] == 'L' && signature[1] == 'I' &&
       signature[2] == 'B') {
     if (signature[3] == 'P') {
-      ret = MLibPtr(new LIBP_t(filename, reader, key_info_.at(product).data_alignment()));
+      const auto data_alignment = GetDataAlignment(product);
+      ret = MLibPtr(new LIBP_t(filename, reader, data_alignment));
     } else if (signature[3] == 'U') {
       ret = MLibPtr(new LIBU_t(filename, reader));
     } else {
@@ -493,7 +458,7 @@ LIBU_t::LIBU_t(LIBU_t *parent, const LIBUENTRY &entry_info)
     offset_(parent->offset_ + entry_info.offset),
     file_size_(entry_info.length) {
   char mb_name[32*5 + 1];
-  utf16_to_utf8(entry_info.file_name, mb_name);
+  UTF16ToUTF8(entry_info.file_name, mb_name);
   name_.assign(mb_name);
   Read(sizeof(hdr_), &hdr_);
   if (IsVerbose()) {
@@ -565,8 +530,8 @@ LIBP_t::SharedObject::SharedObject(LibReader *reader, unsigned int data_alignmen
   data_base_offset += reader->Read(data_base_offset, sizeof(unsigned int) * hdr_.file_count, &file_offsets_[0]);
 
   data_base_offset_ = (data_base_offset + (data_alignment-1)) & ~(data_alignment-1);
-  std::cout << "[Debug] data_alignment = " << data_alignment
-            << ", data base offset = " << std::hex << data_base_offset_ << std::dec << std::endl;
+  // std::cout << "[Debug] data_alignment = " << data_alignment
+  //           << ", data base offset = " << std::hex << data_base_offset_ << std::dec << std::endl;
 }
 
 LIBP_t::LIBP_t(const std::string &lib_name, LibReader *reader, unsigned int data_alignment)
@@ -751,8 +716,8 @@ VersionedFile::VersionedFile(const std::string &name, const std::string &product
   std::string path_right = "";
   std::vector<MLibPtr> mlib_entries;
   while (path_left.empty() == false) {
-    std::printf("[Debug] try to open '%s?%s' (product: %s)\n",
-                path_left.c_str(), path_right.c_str(), product.c_str());
+    // std::printf("[Debug] try to open '%s?%s' (product: %s)\n",
+    //             path_left.c_str(), path_right.c_str(), product.c_str());
     if (GetVersionedMLibEntry(path_left, product, path_right, &mlib_entries, true)) {
       p_files_.reserve(mlib_entries.size());
       for (const auto &p_mlib : mlib_entries) {
@@ -1019,6 +984,59 @@ VersionedFile *VersionedDirectory::OpenFile(const std::string &filename) const {
 }
 
 ////////////////////////////////////////////////////////////////////////
+// Convert UTF16 to UTF8
+////////////////////////////////////////////////////////////////////////
+
+static std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>
+  conv_to_bytes;
+
+size_t UTF16ToUTF8(const char *src, char *dst) {
+  const char *dst_start = dst;
+  for (unsigned long s = 0; ; src += 2) {
+    unsigned long n = src[1] * 0x100 + src[0];
+    if (n == 0L) break;
+    if (n <= 0x7f) {
+      dst[0] = src[0];
+      ++dst;
+      continue;
+    }
+    if (n <= 0x7ff) {
+      dst[0] = 0xc0 | (n >> 6);
+      dst[1] = 0x80 | (n & 0x3f);
+      dst += 2;
+      continue;
+    }
+    if (0xd800 <= n && n <= 0xdbff) {
+      s = n;
+      continue;
+    }
+    if (0xdc00 <= n && n <= 0xdfff) {
+      n = (s - 0xd800) * 0x400 + (n - 0xdc00) + 0x10000;
+      dst[0] = 0xf0 | ((n >> 18) & 0x07);
+      dst[1] = 0x80 | ((n >> 12) & 0x3f);
+      dst[2] = 0x80 | ((n >> 6) & 0x3f);
+      dst[3] = 0x80 | (n & 0x3f);
+      dst += 4;
+      continue;
+    }
+    dst[0] = 0xe0 | ((n >> 12) & 0x0f);
+    dst[1] = 0x80 | ((n >> 6) & 0x3f);
+    dst[2] = 0x80 | (n & 0x3f);
+    dst += 3;
+  }
+  dst[0] = '\0';
+  return dst - dst_start;
+}
+
+std::string UTF16ToUTF8(const char16_t *src, size_t length) {
+  return conv_to_bytes.to_bytes(src, src + length);
+}
+
+std::string UTF16ToUTF8(const std::u16string &src) {
+  return conv_to_bytes.to_bytes(src);
+}
+
+////////////////////////////////////////////////////////////////////////
 // LibReader Create Functions
 ////////////////////////////////////////////////////////////////////////
 
@@ -1051,12 +1069,12 @@ std::string GenerateFullPath(const std::string &path) {
   size_t next_pos = std::string::npos;
   do {
     next_pos = path.find_first_of(kPathDelim, pos);
-    if (next_pos != std::string::npos) {
-      next_pos -= 1;
-    }
     buf = path.substr(pos, next_pos);
     if (buf.empty()) break;
     pos = next_pos;
+    if (pos != std::string::npos) {
+      ++pos;
+    }
     if (buf == ".") continue;
     if (buf == "..") {
       const size_t fullpath_last_delim_pos = fullpath.find_last_of(kPathDelim);
@@ -1171,6 +1189,16 @@ void PrintKeyInfo() {
   }
   std::cout.setf(std::ios::dec, std::ios::basefield);
   std::cout << std::endl;
+}
+
+unsigned int GetDataAlignment(const std::string &product) {
+  std::string product_toupper;
+  product_toupper.resize(product.size());
+  std::transform(product.cbegin(), product.cend(), product_toupper.begin(), ::toupper);
+  const auto it = key_info_.find(product_toupper);
+  if (it == std::end(key_info_)) return 0;
+  const KeyInfo &keyinfo = it->second;
+  return keyinfo.data_alignment();
 }
 
 } // namespace mlib
