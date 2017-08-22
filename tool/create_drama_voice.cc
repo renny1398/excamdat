@@ -1,4 +1,4 @@
-/* create_drama_voice.cc (updated on 2017/06/18)
+/* create_drama_voice.cc (updated on 2017/08/31)
  * Copyright (C) 2017 renny1398.
  *
  * This program is free software; you can redistribute it and/or
@@ -26,8 +26,8 @@
 
 int main(int argc, char **argv) {
 
-  if (argc < 3) {
-    std::cout << "Usage: create_drama_voice <product_name> <voice_path>" << std::endl;
+  if (argc < 4) {
+    std::cout << "Usage: create_drama_voice <product_name> <scenario.txt> <voice_path>" << std::endl;
     return 0;
   }
 
@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
   }
 
   std::string product_name = argv[1];
-  std::string base_entry_path = argv[2];
+  std::string base_entry_path = argv[3];
   if (base_entry_path.back() == mlib::kPathDelim) {
     base_entry_path.pop_back();
   }
@@ -54,9 +54,10 @@ int main(int argc, char **argv) {
   }
   std::cout << "Voice version is " << base_entry->GetVersion() << '.' << std::endl;
 
-  std::ifstream exec7("exec7.txt");
+  const std::string text_name(argv[2]);
+  std::ifstream exec7(text_name);
   if (exec7.is_open() == false) {
-    std::cerr << "ERROR: failed to open exec7.txt." << std::endl;
+    std::cerr << "ERROR: failed to open " << argv[2] << '.' << std::endl;
     delete base_entry;
     return -1;
   }
@@ -64,6 +65,16 @@ int main(int argc, char **argv) {
   std::string dir_name(product_name);
   dir_name.append(".drama");
   ::mkdir(dir_name.c_str(), 0755);
+
+  if (text_name != "scenario.txt" && text_name != "exec7.txt") {
+    std::string subdir_name(text_name);
+    auto dot_index = subdir_name.find(".");
+    if (dot_index != std::string::npos) {
+      dir_name.append(1, mlib::kPathDelim);
+      dir_name.append(subdir_name.substr(0, dot_index));
+      ::mkdir(dir_name.c_str(), 0755);
+    }
+  }
 
   std::string lower_product_name;
   std::transform(product_name.begin(), product_name.end(), lower_product_name.begin(), ::tolower);
@@ -107,7 +118,7 @@ int main(int argc, char **argv) {
       voice_entry->Seek(0, 0);
       voice_entry->Read(file_size, buf);
       char out_filename[32];
-      sprintf(out_filename, "%s%cv_%s%05d_%s.ogg",
+      sprintf(out_filename, "%s%cv_%s%04d_%s.ogg",
               dir_name.c_str(), mlib::kPathDelim, lower_product_name.c_str(), ++seq, chara_name.c_str());
       std::ofstream ofs(out_filename);
       std::cout << out_filename;

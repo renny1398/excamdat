@@ -1,4 +1,4 @@
-/* exec7parser.cc (updated on 2017/08/27)
+/* routesim.cc (updated on 2017/08/24)
  * Copyright (C) 2017 renny1398.
  *
  * This program is free software; you can redistribute it and/or
@@ -23,7 +23,7 @@
 int main(int argc, char **argv) {
 
   if (argc < 2) {
-    std::cout << "Usage: exec7parser <product_name> <exec.dat>" << std::endl;
+    std::cout << "Usage: routesim <product_name> <exec.dat>" << std::endl;
     return 0;
   }
 
@@ -51,16 +51,7 @@ int main(int argc, char **argv) {
   }
 
   mlib::Exec exec(&file, argv[1]);
-  // mlib::ExecTextToASText to_as("scenario.txt");
-  mlib::ExecTextToXhtml to_xhtml(argv[1]);
   mlib::VMParser parser(&exec);
-#if 0
-  // exec.OutputVariableList("variable_list.csv");
-  // exec.OutputFunctionList("func_list.csv");
-  // exec.OutputLabelList("label_list.csv");
-  parser.Disassemble("disasm.txt");
-#endif
-  // parser.ParseScenario(&to_as);
-  parser.ParseScenario(&to_xhtml);
+  parser.SimulateRoutes();
   return 0;
 }

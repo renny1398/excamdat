@@ -168,6 +168,7 @@ bool Extractor::TexCat(const MLibPtr &dzi, const MLibPtr &tex_entry, const std::
 
       SDL_Surface *surface = SDL_CreateRGBSurface(0, width, height, 32,
                                                   0x0000ff00, 0x00ff0000, 0xff000000, 0x000000ff);
+      bool warning_caused = false;
       for (int i = 0; i < 256 * rows; i += 256) {
         const int tex_height = std::min(256, height - i);
         std::getline(ss, token);
@@ -188,7 +189,15 @@ bool Extractor::TexCat(const MLibPtr &dzi, const MLibPtr &tex_entry, const std::
             tex_file = tex_entry->GetEntry(tex_name + ".png");
             if (tex_file == nullptr) {
               tex_file = tex_entry->GetEntry(tex_name + ".webp");
-              if (tex_file == nullptr) continue;
+              if (tex_file == nullptr) {
+                if (warning_caused == false) {
+                  warning_caused = true;
+                  std::cout << std::endl;
+                }
+                std::cerr << " -- Warning: failed to open a tex-file '"
+                          << tex_name << "'." << std::endl;
+                continue;
+              }
             }
           }
           // std::cout << " -- Loading " << tex_file->GetName() << "...";
@@ -214,7 +223,9 @@ bool Extractor::TexCat(const MLibPtr &dzi, const MLibPtr &tex_entry, const std::
       out_fullname.append(out_name);
       IMG_SavePNG(surface, out_fullname.c_str());
       SDL_FreeSurface(surface);
-      std::cout << "OK." << std::endl;
+      if (warning_caused == false) {
+        std::cout << "OK." << std::endl;
+      }
       if (l == texlv_) break;
     }
   } catch (std::invalid_argument &e) {
@@ -343,7 +354,7 @@ bool Extractor::Extract(const MLibPtr &mlib, const std::string &lib_path, const 
   }
 #endif
 
-  if (mlib->Parent() == nullptr && mlib->IsDirectory() && (mlib->GetChildNumber() != 1 || mlib->Child(0)->IsFile())) {
+  if (mlib->Parent() == nullptr && mlib->IsDirectory() && mlib->HasOnlyDirectories() == false) {
     fs_path_tmp.append("data");
     struct stat st;
     if (::stat(fs_path_tmp.c_str(), &st) != 0) {

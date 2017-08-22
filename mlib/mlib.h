@@ -110,8 +110,10 @@ public:
 
   MLibPtr GetEntry(const std::string &path);
   bool GetAllChildren(std::vector<MLibPtr> *dest);
+  bool HasOnlyDirectories() const;
 
   size_t Read(size_t size, void *dest);
+  size_t Read(off_t offset, size_t size, void *dest);
   off_t Tell() const;
   off_t Seek(off_t new_pos, int whence);
 

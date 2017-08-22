@@ -105,7 +105,7 @@ const std::string MLib::FormatOldStylePath(const std::string &mlib,
 
 MLib::MLib(const std::string &lib_name, LibReader *reader)
   : parent_(), libname_(GenerateFullPath(lib_name)), reader_(reader), file_pos_(0) {
-  verbose_= true;
+  verbose_= false;
   if (IsVerbose()) {
     std::cout << "[Info] MLib: opened and set fd " << reader->fd() << "." << std::endl;
   }
@@ -319,11 +319,25 @@ bool MLib::GetAllChildren(std::vector<MLibPtr> *dest) {
   return true;
 }
 
+bool MLib::HasOnlyDirectories() const {
+  if (IsFile()) return false;
+  const auto child_num = GetChildNumber();
+  MLib* self = const_cast<MLib*>(this);
+  for (unsigned int i = 0; i < child_num; ++i) {
+    if (self->Child(i)->IsFile() == true) return false;
+  }
+  return true;
+}
+
+size_t MLib::Read(off_t offset, size_t size, void *dest) {
+  return reader_->Read(GetFileBaseOffset() + offset, size, dest);
+}
+
 size_t MLib::Read(size_t size, void *dest) {
   // if (IsDirectory()) {
   //   return 0;
   // }
-  size_t ret = reader_->Read(GetFileBaseOffset() + file_pos_, size, dest);
+  size_t ret = Read(file_pos_, size, dest);
   file_pos_ += ret;
   return ret;
 }
