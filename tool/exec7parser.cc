@@ -44,8 +44,8 @@ int main(int argc, char **argv) {
     return -1;
   }
 
-  mlib::VersionedFile file(dat_name, argv[1]);
-  if (file.IsOpened() == false) {
+  mlib::VersionedEntry file(dat_name, argv[1]);
+  if (file.IsFile() == false) {
     std::cerr << "ERROR: failed to open '" << dat_name << "'." << std::endl;
     return -1;
   }

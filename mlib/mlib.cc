@@ -1,5 +1,5 @@
-/* mlib.cc (updated on 2017/06/28)
- * Copyright (C) 2017 renny1398.
+/* mlib.cc (updated on 2018/04/18)
+ * Copyright (C) 2017-2018 renny1398.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -33,6 +33,7 @@
 #include <locale>
 #include <codecvt>
 #include <stdexcept>
+#include <regex>
 #include "mlib.h"
 #include "reader.h"
 
@@ -40,13 +41,55 @@ namespace {
 
 std::map<std::string, mlib::KeyInfo> key_info_;
 
-bool GetVersionedMLibEntry(const std::string &mlib_name, const std::string &product,
-                           const std::string &mlib_internal_path,
-                           std::vector<mlib::MLibPtr> *mlib_entries, bool is_file) {
+std::string relpath2abspath(const std::string& relpath) {
+  std::string abspath;
+  std::string curr_relpath;
+#ifdef _WINDOWS
+  static std::regex re("^(?:[A-Za-z]:)?[\\\\/]");
+#else
+  static std::regex re_root("^/.*$");
+#endif
+  std::smatch match;
+  if (relpath.empty() || !std::regex_match(relpath, match, re_root)) {
+    char* cwd = ::getcwd(nullptr, 0);
+    abspath.assign(cwd);
+    ::free(cwd);    
+    abspath.append(1, mlib::kPathDelim);
+    curr_relpath = relpath;
+  } else {
+    abspath = match.str();
+    curr_relpath = relpath.substr(abspath.length(), std::string::npos);
+  }
+  while ( !curr_relpath.empty() ) {
+    static std::regex re_child("^([\\\\/]*)(?:\\\\|/|$)");
+    static std::regex re_abs_parent("^(.*[\\\\/])[^\\\\/]+[\\\\/]?$");
+    if (!std::regex_match(curr_relpath, match, re_child)) {
+      return std::string();
+    }
+    if (match[1].str() == "..") {
+      curr_relpath.erase(0, match.str().length());
+      if (!std::regex_match(abspath, match, re_abs_parent)) {
+        return std::string();
+      }
+      abspath = match[1].str();
+    } else if (match[1].str() == ".") {
+      curr_relpath.erase(0, match.str().length());
+    } else {
+      curr_relpath.erase(0, match.str().length());
+      abspath.append(match.str());
+    }
+  }
+  std::replace(abspath.begin(), abspath.end(),
+               mlib::kPathDelimNotUsed, mlib::kPathDelim);
+  return abspath;
+}
+
+std::vector<mlib::MLibPtr> GetMLibEntryHistory(const std::string& mlib_name,
+                                               const std::string& product,
+                                               const std::string& mlib_internal_path) {
   static const char *ext[2] = { ".dat", ".lib" };
-  if (mlib_entries == nullptr) return false;
-  // mlib_entries->clear();
-  mlib_entries->reserve(mlib_entries->size() + 22);
+  std::vector<mlib::MLibPtr> mlib_entries;
+  mlib_entries.reserve(22);
   const auto ext_pos = mlib_name.find_last_of('.', std::string::npos);
   const std::string mlib_name_without_ext =
       (ext_pos == std::string::npos) ? mlib_name : mlib_name.substr(0, ext_pos);
@@ -54,61 +97,35 @@ bool GetVersionedMLibEntry(const std::string &mlib_name, const std::string &prod
   const std::string name =
       (delim_pos == std::string::npos) ? mlib_name_without_ext : mlib_name_without_ext.substr(0, delim_pos);
   std::string fixed_mlib_name;
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i < 2; ++i) { // { 0 : ".dat", 1 : ".lib" }
     for (char j = '9'; '0' <= j; --j) {
       fixed_mlib_name.assign(mlib_name_without_ext);
       if (j != '0') fixed_mlib_name.append(1, j);
       fixed_mlib_name.append(ext[i]);
-      mlib::MLibPtr mlib_base = mlib::MLib::Open(fixed_mlib_name, product);
-      if (mlib_base == nullptr) continue;
-      mlib::MLibPtr mlib = mlib_base->GetEntry(name + mlib::kPathDelim + mlib_internal_path);
-      if (mlib != nullptr && mlib->IsFile() == is_file) {
-        mlib_entries->push_back(mlib);
-      } else {
-        mlib = mlib_base->GetEntry(mlib_internal_path);
-        if (mlib != nullptr && mlib->IsFile() == is_file) {
-          mlib_entries->push_back(mlib);
-        }
+      mlib::MLibPtr p_mlib_base = mlib::MLib::Open(fixed_mlib_name, product);
+      if (p_mlib_base == nullptr) continue;
+      mlib::MLibPtr mlib = p_mlib_base->Child(name);
+      if (mlib == nullptr) mlib = p_mlib_base;
+      mlib = mlib->GetEntry(mlib_internal_path);
+      if (mlib != nullptr) {
+        mlib_entries.push_back(mlib);
       }
     }
   }
-  return (mlib_entries->empty() == false);
+  return mlib_entries;
 }
 
 } // namespace
 
 namespace mlib {
 
-const std::string MLib::FormatOldStylePath(const std::string &mlib,
-                                           const std::string &internal_path) {
-  std::string ret = mlib;
-  ret.reserve(mlib.size() + internal_path.size() + 2);
-  ret.append(1, '|');
-  for (auto &c : internal_path) {
-    ret.append(1, (c == kPathDelim) ? '|' : c);
-  }
-  return ret;
-}
-
-const std::string MLib::FormatOldStylePath(const std::string &mlib,
-                                           const std::string &location,
-                                           const std::string &name) {
-  std::string internal_path = location;
-  internal_path.append(1, kPathDelim);
-  internal_path.append(name);
-  return FormatOldStylePath(mlib, internal_path);
-}
-
 ////////////////////////////////////////////////////////////////////////
 // MLib Class Function Definitions
 ////////////////////////////////////////////////////////////////////////
 
-MLib::MLib(const std::string &lib_name, LibReader *reader)
+MLib::MLib(const std::string &lib_name, Reader *reader)
   : parent_(), libname_(GenerateFullPath(lib_name)), reader_(reader), file_pos_(0) {
   verbose_= false;
-  if (IsVerbose()) {
-    std::cout << "[Info] MLib: opened and set fd " << reader->fd() << "." << std::endl;
-  }
 }
 
 MLib::MLib(MLib *parent)
@@ -122,21 +139,10 @@ MLib::MLib(MLib *parent)
   location_.append(parent->GetName());
 }
 
-MLib::~MLib() {
-  children_.clear();
-  if (reader_.unique()) {
-    int fd = reader_->fd();
-    reader_.reset();
-    ::close(fd);
-    if (IsVerbose()) {
-      std::cout << "[Info] MLib: closed fd " << fd << "." << std::endl;
-    }
-  }
-}
-
 std::map< std::string, std::weak_ptr<MLib> > MLib::opened_libs_;
 
 MLibPtr MLib::Open(const std::string &filename, const std::string &product) {
+  // check if the library with the given filename has already been open
   auto opened = opened_libs_.find(filename);
   if (opened != opened_libs_.end()) {
     if (opened->second.expired() == false) {
@@ -145,10 +151,11 @@ MLibPtr MLib::Open(const std::string &filename, const std::string &product) {
     opened_libs_.erase(opened);
   }
 
-  LibReader *reader = CreateReader(filename, product);
+  Reader *reader = mlib::CreateReader(filename, product);
   if (reader == nullptr) return nullptr;
   char signature[4];
   reader->Read(0, 4, signature);
+
   MLibPtr ret;
   if (signature[0] == 'L' && signature[1] == 'I' &&
       signature[2] == 'B') {
@@ -170,31 +177,22 @@ MLibPtr MLib::Open(const std::string &filename, const std::string &product) {
   return ret;
 }
 
-const std::string &MLib::GetLibraryName() const {
-  return libname_;
+std::string MLib::GetLocation() const noexcept {
+  std::string location = location_;
+  std::replace(location.begin(), location.end(), '/', '|');
+  return libname() + location + name();
 }
 
-const std::string &MLib::GetLocation() const {
-  return location_;
-}
-
-bool MLib::IsDirectory() const {
-  return (IsFile() == false);
-}
-
-const MLibPtr &MLib::Parent() {
-  return parent_;
-}
-
-const MLibPtr MLib::CreateChild(size_t i) {
-  auto &child(children_.at(i));
-  if (child.expired()) {
-    MLibPtr new_child(DoCreateChild(i));
-    child = new_child;
-    new_child->self_ = child;
-    return new_child;
+const MLibPtr MLib::GetOrCreateChild(size_t i) noexcept {
+  assert(i < children_.size());
+  auto& p_child(children_.at(i));
+  if (p_child.expired()) {
+    MLibPtr p_new_child(CreateChild(i));
+    p_child = p_new_child;
+    p_new_child->self_ = p_child;
+    return p_new_child;
   }
-  const MLibPtr p_child_locked = child.lock();
+  const MLibPtr p_child_locked = p_child.lock();
   if (IsVerbose()) {
     std::cout << "[Info] MLib: '" << p_child_locked->GetName()
               << "' is already opened." << std::endl;
@@ -202,7 +200,7 @@ const MLibPtr MLib::CreateChild(size_t i) {
   return p_child_locked;
 }
 
-MLibPtr MLib::Child(size_t i) {
+MLibPtr MLib::Child(size_t i) noexcept {
   if (IsFile()) {
     return MLibPtr();
   }
@@ -210,24 +208,34 @@ MLibPtr MLib::Child(size_t i) {
   if (children_.size() <= i) {
     return MLibPtr();
   }
-  return CreateChild(i);
+  return GetOrCreateChild(i);
 }
 
-MLibPtr MLib::Child(const std::string &name) {
+MLibPtr MLib::Child(const std::string &name) noexcept {
   if (IsFile()) {
     return MLibPtr();
   }
   LoadChildInfo();
   const auto it = child_name2index_.find(name);
   if (it != child_name2index_.cend()) {
-    return CreateChild(it->second);
+    return GetOrCreateChild(it->second);
   } else {
     return MLibPtr();
   }
 }
 
-const std::string MLib::GetChildName(size_t i) const {
+std::string MLib::GetChildName(size_t i) const noexcept {
   return std::string(GetChildNameAsCharArray(i));
+}
+
+std::vector<std::string> MLib::GetChildNameList() const noexcept {
+  std::vector<std::string> ret;
+  const auto count = GetChildNumber();
+  ret.reserve(count);
+  for (unsigned int i = 0; i < count; ++i) {
+    ret.emplace_back(GetChildNameAsCharArray(i));
+  }
+  return ret;
 }
 
 void MLib::LoadChildInfo() {
@@ -243,7 +251,7 @@ void MLib::LoadChildInfo() {
   }
 }
 
-MLibPtr MLib::GetEntry(const std::string &path, size_t index) {
+MLibPtr MLib::GetEntry(const std::string &path, size_t index) noexcept {
   const size_t delim_pos = path.find_first_of(kPathDelim, index);
   const std::string target_entry_name =
       (index == std::string::npos) ? "" :
@@ -291,7 +299,7 @@ MLibPtr MLib::GetEntry(const std::string &path, size_t index) {
   return child->GetEntry(path, sub_index);
 }
 
-MLibPtr MLib::GetEntry(const std::string &path) {
+MLibPtr MLib::GetEntry(const std::string &path) noexcept {
   std::string path_tmp(path);
   std::replace(path_tmp.begin(), path_tmp.end(), kPathDelimNotUsed, kPathDelim);
   if (path_tmp.back() == kPathDelim) {
@@ -306,20 +314,19 @@ MLibPtr MLib::GetEntry(const std::string &path) {
   return ret;
 }
 
-bool MLib::GetAllChildren(std::vector<MLibPtr> *dest) {
-  if (IsFile()) return false;
-  if (dest == nullptr) return false;
-  dest->clear();
+std::vector<MLibPtr> MLib::GetChildren() noexcept {
+  if (IsFile()) return std::vector<MLibPtr>();
   LoadChildInfo();
+  std::vector<MLibPtr> ret;
   const auto child_num = GetChildNumber();
-  dest->reserve(child_num);
+  ret.reserve(child_num);
   for (unsigned int i = 0; i < child_num; ++i) {
-    dest->push_back(CreateChild(i));
+    ret.push_back(GetOrCreateChild(i));
   }
-  return true;
+  return ret;
 }
 
-bool MLib::HasOnlyDirectories() const {
+bool MLib::HasOnlyDirectories() const noexcept {
   if (IsFile()) return false;
   const auto child_num = GetChildNumber();
   MLib* self = const_cast<MLib*>(this);
@@ -330,7 +337,14 @@ bool MLib::HasOnlyDirectories() const {
 }
 
 size_t MLib::Read(off_t offset, size_t size, void *dest) {
-  return reader_->Read(GetFileBaseOffset() + offset, size, dest);
+  auto read_bytes = reader_->Read(GetFileBaseOffset() + offset, size, dest);
+  if (size != 0 && read_bytes == 0) {
+    std::cerr << "[WARN] MLib::Read(): failed to read data in '"
+              << location() << kPathDelim << GetName()
+              << "'. Check if the data and DATA_ALIGNMENT are correct."
+              << std::endl;
+  }
+  return read_bytes;
 }
 
 size_t MLib::Read(size_t size, void *dest) {
@@ -342,12 +356,12 @@ size_t MLib::Read(size_t size, void *dest) {
   return ret;
 }
 
-off_t MLib::Tell() const {
-  if (IsDirectory()) return -1;
+off_t MLib::Tell() const noexcept {
+  if ( !IsFile() ) return -1;
   return file_pos_;
 }
 
-off_t MLib::Seek(off_t new_pos, int whence) {
+off_t MLib::Seek(off_t new_pos, int whence) noexcept {
   // if (IsDirectory()) return -1;
   switch (whence) {
   case SEEK_SET:
@@ -356,13 +370,13 @@ off_t MLib::Seek(off_t new_pos, int whence) {
     new_pos += file_pos_;
     break;
   case SEEK_END:
-    new_pos += static_cast<off_t>(GetFileSize());
+    new_pos += static_cast<off_t>(GetSize());
     break;
   default:
     return -1;
   }
   new_pos = std::max(static_cast<off_t>(0), new_pos);
-  file_pos_ = std::min(new_pos, static_cast<off_t>(GetFileSize()));
+  file_pos_ = std::min(new_pos, static_cast<off_t>(GetSize()));
   return file_pos_;
 }
 
@@ -391,7 +405,7 @@ void MLib::List(const std::string &path) const {
 // LIB_t Class Function Definitions
 ////////////////////////////////////////////////////////////////////////
 
-LIB_t::LIB_t(const std::string &lib_name, LibReader *reader)
+LIB_t::LIB_t(const std::string &lib_name, Reader *reader)
   : MLib(lib_name, reader), offset_(0), file_size_(reader->GetSize()) {
   reader->Read(0, sizeof(hdr_), &hdr_);
   if (IsVerbose()) {
@@ -415,25 +429,18 @@ LIB_t::~LIB_t() {
   }
 }
 
-const std::string &LIB_t::GetName() const {
-  return name_;
-}
-
-bool LIB_t::IsFile() const {
-  return (hdr_.signature[0] != 'L' || hdr_.signature[1] != 'I' ||
+bool LIB_t::IsFile() const noexcept {
+  return IsOpen() &&
+         (hdr_.signature[0] != 'L' || hdr_.signature[1] != 'I' ||
           hdr_.signature[2] != 'B' || hdr_.signature[3] != '\0');
 }
 
-unsigned int LIB_t::GetFileSize() const {
-  return file_size_;
-}
-
-unsigned int LIB_t::GetChildNumber() const {
-  if (IsFile()) { return 0; }
+unsigned int LIB_t::GetChildNumber() const noexcept {
+  if ( !IsOpen() || IsFile() ) { return 0; }
   return hdr_.entry_count;
 }
 
-void LIB_t::DoLoadChildInfo() {
+void LIB_t::DoLoadChildInfo() noexcept {
   const auto num = hdr_.entry_count;
   if (entries_.size() == num) return;
   entries_.assign(num, LIBENTRY());
@@ -441,17 +448,17 @@ void LIB_t::DoLoadChildInfo() {
   Read(sizeof(LIBENTRY) * num, &entries_[0]);
 }
 
-const char *LIB_t::GetChildNameAsCharArray(size_t i) const {
+const char *LIB_t::GetChildNameAsCharArray(size_t i) const noexcept {
   assert(entries_.size() == hdr_.entry_count);
   return entries_[i].file_name;
 }
 
-MLib *LIB_t::DoCreateChild(size_t i) {
+MLib *LIB_t::CreateChild(size_t i) noexcept {
   assert(entries_.size() == hdr_.entry_count);
   return new LIB_t(this, entries_.at(i));
 }
 
-off_t LIB_t::GetFileBaseOffset() const {
+off_t LIB_t::GetFileBaseOffset() const noexcept {
   return offset_;
 }
 
@@ -459,7 +466,7 @@ off_t LIB_t::GetFileBaseOffset() const {
 // LIBU_t Class Function Definitions
 ////////////////////////////////////////////////////////////////////////
 
-LIBU_t::LIBU_t(const std::string &lib_name, LibReader *reader)
+LIBU_t::LIBU_t(const std::string &lib_name, Reader *reader)
   : MLib(lib_name, reader), offset_(0), file_size_(reader->GetSize()) {
   reader->Read(0, sizeof(hdr_), &hdr_);
   if (IsVerbose()) {
@@ -486,25 +493,18 @@ LIBU_t::~LIBU_t() {
   }
 }
 
-const std::string &LIBU_t::GetName() const {
-  return name_;
-}
-
-bool LIBU_t::IsFile() const {
-  return (hdr_.signature[0] != 'L' || hdr_.signature[1] != 'I' ||
+bool LIBU_t::IsFile() const noexcept {
+  return IsOpen() &&
+         (hdr_.signature[0] != 'L' || hdr_.signature[1] != 'I' ||
           hdr_.signature[2] != 'B' || hdr_.signature[3] != 'U');
 }
 
-unsigned int LIBU_t::GetFileSize() const {
-  return file_size_;
-}
-
-unsigned int LIBU_t::GetChildNumber() const {
-  if (IsFile()) { return 0; }
+unsigned int LIBU_t::GetChildNumber() const noexcept {
+  if ( !IsOpen() || IsFile() ) { return 0; }
   return hdr_.entry_count;
 }
 
-void LIBU_t::DoLoadChildInfo() {
+void LIBU_t::DoLoadChildInfo() noexcept {
   const auto num = hdr_.entry_count;
   if (entries_.size() == num) return;
   entries_.assign(num, LIBUENTRY());
@@ -512,17 +512,17 @@ void LIBU_t::DoLoadChildInfo() {
   Read(sizeof(LIBUENTRY) * num, &entries_[0]);
 }
 
-const char *LIBU_t::GetChildNameAsCharArray(size_t i) const {
+const char *LIBU_t::GetChildNameAsCharArray(size_t i) const noexcept {
   assert(entries_.size() == hdr_.entry_count);
   return entries_[i].file_name;
 }
 
-MLib *LIBU_t::DoCreateChild(size_t i) {
+MLib *LIBU_t::CreateChild(size_t i) noexcept {
   assert(entries_.size() == hdr_.entry_count);
   return new LIBU_t(this, entries_[i]);
 }
 
-off_t LIBU_t::GetFileBaseOffset() const {
+off_t LIBU_t::GetFileBaseOffset() const noexcept {
   return offset_;
 }
 
@@ -530,7 +530,7 @@ off_t LIBU_t::GetFileBaseOffset() const {
 // LIBP_t Class Function Definitions
 ////////////////////////////////////////////////////////////////////////
 
-LIBP_t::SharedObject::SharedObject(LibReader *reader, unsigned int data_alignment) {
+LIBP_t::SharedObject::SharedObject(Reader *reader, unsigned int data_alignment) {
 
   static_assert(sizeof(LIBPHDR) == 16, "size of LIBPHDR must be 16");
   static_assert(sizeof(LIBPENTRY) == 32, "size of LIBPENTRY must be 32");
@@ -548,11 +548,11 @@ LIBP_t::SharedObject::SharedObject(LibReader *reader, unsigned int data_alignmen
   //           << ", data base offset = " << std::hex << data_base_offset_ << std::dec << std::endl;
 }
 
-LIBP_t::LIBP_t(const std::string &lib_name, LibReader *reader, unsigned int data_alignment)
+LIBP_t::LIBP_t(const std::string &lib_name, Reader *reader, unsigned int data_alignment)
   : MLib(lib_name, reader), shobj_(new SharedObject(reader, data_alignment)),
     entry_index_(0), name_(shobj_->entries_.at(0).file_name) {
   if (IsVerbose()) {
-    std::cout << "[Info] LIBP: opened '" << GetLibraryName() << "' (root)." << std::endl;
+    std::cout << "[Info] LIBP: opened '" << libname() << "' (root)." << std::endl;
   }
 }
 
@@ -565,7 +565,7 @@ LIBP_t::LIBP_t(const std::shared_ptr<SharedObject> &shobj, LIBP_t *parent, unsig
     std::cout << "[Info] LIBP: opened '" << GetName()
               << "' (entry index = " << entry_index;
     if (IsFile()) {
-      std::cout << ", file size = " << GetFileSize()
+      std::cout << ", file size = " << GetSize()
                 << ", base offset = 0x" << std::hex << GetFileBaseOffset() << std::dec;
     }
     std::cout << ")." << std::endl;
@@ -578,38 +578,35 @@ LIBP_t::~LIBP_t() {
   }
 }
 
-const std::string &LIBP_t::GetName() const {
-  return name_;
-}
-
-bool LIBP_t::IsFile() const {
+bool LIBP_t::IsFile() const noexcept {
+  if ( !IsOpen() ) return false;
   const unsigned int &flags = shobj_->entries_[entry_index_].flags;
   return (flags & (LIBPENTRY::kFlagFile | LIBPENTRY::kFlagFile2));
 }
 
-unsigned int LIBP_t::GetFileSize() const {
-  if (IsDirectory()) { return 0; }
-  return shobj_->entries_.at(entry_index_).length;
+size_t LIBP_t::GetSize() const noexcept {
+  if ( !IsFile() ) { return 0UL; }
+  return static_cast<size_t>(shobj_->entries_.at(entry_index_).length);
 }
 
-unsigned int LIBP_t::GetChildNumber() const {
+unsigned int LIBP_t::GetChildNumber() const noexcept {
   if (IsFile()) { return 0; }
   return shobj_->entries_.at(entry_index_).length;
 }
 
-void LIBP_t::DoLoadChildInfo() {}
+void LIBP_t::DoLoadChildInfo() noexcept {}
 
-const char *LIBP_t::GetChildNameAsCharArray(size_t i) const {
+const char *LIBP_t::GetChildNameAsCharArray(size_t i) const noexcept {
   LIBPENTRY &entry = shobj_->entries_.at(entry_index_);
   const auto child_entry_index = entry.offset_index + i;
   return shobj_->entries_.at(child_entry_index).file_name;
 }
 
-MLib *LIBP_t::DoCreateChild(size_t i) {
+MLib *LIBP_t::CreateChild(size_t i) noexcept {
   LIBPENTRY &entry = shobj_->entries_.at(entry_index_);
   const auto child_entry_index = entry.offset_index + i;
   if (shobj_->hdr_.entry_count <= child_entry_index) {
-    std::cerr << "[Error] LIBP: entry index " << child_entry_index
+    std::cerr << "[ERROR] LIBP: entry index " << child_entry_index
               << " is greater than or equal to entry number.\n(entry number: "
               << shobj_->hdr_.entry_count << ", current entry name: "
               << entry.file_name << ')' << std::endl;
@@ -618,7 +615,7 @@ MLib *LIBP_t::DoCreateChild(size_t i) {
   return new LIBP_t(shobj_, this, child_entry_index);
 }
 
-off_t LIBP_t::GetFileBaseOffset() const {
+off_t LIBP_t::GetFileBaseOffset() const noexcept {
   if (IsDirectory()) { return -1; }
   off_t base_offset = shobj_->file_offsets_.at(shobj_->entries_.at(entry_index_).offset_index);
   base_offset *= 1024;
@@ -631,7 +628,11 @@ off_t LIBP_t::GetFileBaseOffset() const {
 ////////////////////////////////////////////////////////////////////////
 
 OSFile::OSFile(const std::string &name)
-  : fp_(::fopen(name.c_str(), "rb")), name_(name) {}
+  : fp_(::fopen(name.c_str(), "rb")), name_() {
+  if (fp_ != nullptr) {
+    name_.assign(relpath2abspath(name));
+  }
+}
 
 OSFile::OSFile(OSFile &&f) noexcept
   : fp_(f.fp_), name_(std::move(f.name_)) {
@@ -644,16 +645,39 @@ OSFile::~OSFile() {
   }
 }
 
-bool OSFile::IsOpened() const {
+bool OSFile::IsOpen() const noexcept {
   return (fp_ != nullptr);
 }
 
-// WARNING: incompleted
-const std::string OSFile::GetFullPath() const {
+bool OSFile::IsFile() const noexcept {
+  return (fp_ != nullptr);
+}
+
+std::string OSFile::GetName() const noexcept {
+  static std::regex re_name("[\\\\/]([^\\\\/]+)$");
+  std::smatch match;
+  if (std::regex_match(name_, match, re_name)) {
+    return match[1].str();
+  } else {
+    return std::string();
+  }
+}
+
+std::string OSFile::GetLocation() const noexcept {
+  static std::regex re_location("^(.*[\\\\/])(?:[^\\\\/]+)$");
+  std::smatch match;
+  if (std::regex_match(name_, match, re_location)) {
+    return match[1].str();
+  } else {
+    return std::string();
+  }
+}
+
+std::string OSFile::GetFullPath() const noexcept {
   return name_;
 }
 
-size_t OSFile::GetSize() const {
+size_t OSFile::GetSize() const noexcept {
   auto t = ::ftell(fp_);
   ::fseek(fp_, 0, SEEK_END);
   auto ret = ::ftell(fp_);
@@ -661,7 +685,7 @@ size_t OSFile::GetSize() const {
   return ret;
 }
 
-off_t OSFile::Seek(off_t offset, int whence) {
+off_t OSFile::Seek(off_t offset, int whence) noexcept {
   off_t ret = ::ftell(fp_);
   if (fp_) {
     ::fseek(fp_, offset, whence);
@@ -670,153 +694,8 @@ off_t OSFile::Seek(off_t offset, int whence) {
   return ret;
 }
 
-size_t OSFile::Read(size_t size, void *dest) {
+size_t OSFile::Read(size_t size, void *dest) noexcept(false) {
   return ::fread(dest, 1, size, fp_);
-}
-
-MLibEmbbedFile::MLibEmbbedFile(const MLibPtr &mlib) : p_file_(mlib) {
-  if (p_file_ != nullptr && p_file_->IsDirectory()) {
-    p_file_.reset();
-  }
-}
-
-MLibEmbbedFile::MLibEmbbedFile(const std::string &name, const std::string &product)
-  : MLibEmbbedFile(MLib::Open(name, product)) {}
-
-MLibEmbbedFile::MLibEmbbedFile(MLibEmbbedFile &&f) noexcept
-  : p_file_(f.p_file_) {
-  f.p_file_.reset();
-}
-
-MLibEmbbedFile::~MLibEmbbedFile() {}
-
-bool MLibEmbbedFile::IsOpened() const {
-  return (p_file_ != nullptr);
-}
-
-const std::string MLibEmbbedFile::GetFullPath() const {
-  if (p_file_ == nullptr) {
-    return std::string();
-  }
-  return MLib::FormatOldStylePath(p_file_->GetLibraryName(),
-                                  p_file_->GetLocation(),
-                                  p_file_->GetName());
-}
-
-size_t MLibEmbbedFile::GetSize() const {
-  if (p_file_ == nullptr) return 0;
-  return p_file_->GetFileSize();
-}
-
-off_t MLibEmbbedFile::Seek(off_t offset, int whence) {
-  if (p_file_ == nullptr) return -1;
-  return p_file_->Seek(offset, whence);
-}
-
-size_t MLibEmbbedFile::Read(size_t size, void *dest) {
-  return p_file_->Read(size, dest);
-}
-
-VersionedFile::VersionedFile(const std::string &name, const std::string &product)
-  : p_(nullptr), point_at_(-1) {
-  OSFile *p_os_file = new OSFile(name);
-  if (p_os_file->IsOpened()) {
-    p_files_.push_back(p_os_file);
-  } else {
-    delete p_os_file;
-    p_os_file = nullptr;
-  }
-  std::string path_left = name;
-  std::string path_right = "";
-  std::vector<MLibPtr> mlib_entries;
-  while (path_left.empty() == false) {
-    // std::printf("[Debug] try to open '%s?%s' (product: %s)\n",
-    //             path_left.c_str(), path_right.c_str(), product.c_str());
-    if (GetVersionedMLibEntry(path_left, product, path_right, &mlib_entries, true)) {
-      p_files_.reserve(mlib_entries.size());
-      for (const auto &p_mlib : mlib_entries) {
-        p_files_.push_back(new MLibEmbbedFile(p_mlib));
-      }
-      mlib_entries.clear();
-      break;
-    }
-    const auto delim_pos = path_left.find_last_of(kPathDelim);
-    if (delim_pos == std::string::npos) {
-      break;
-    }
-    if (path_right.empty() == false) {
-      path_right.insert(0, 1, kPathDelim);
-    }
-    path_right.insert(0, path_left.substr(delim_pos + 1));
-    path_left.erase(delim_pos);
-  }
-  if (p_files_.empty() == false) {
-    p_ = p_files_[0];
-    point_at_ = static_cast<int>(p_files_.size());
-  }
-}
-
-VersionedFile::VersionedFile(std::vector<File *> &&f) noexcept
-  : p_files_(std::move(f)), p_(nullptr), point_at_(-1) {
-  if (p_files_.empty() == false) {
-    p_ = p_files_[0];
-    point_at_ = static_cast<int>(p_files_.size());
-  }
-}
-
-VersionedFile::~VersionedFile() {
-  for (auto &p : p_files_) {
-    if (p) delete p;
-  }
-}
-
-bool VersionedFile::IsOpened() const {
-  return (p_files_.empty() == false);
-}
-
-int VersionedFile::GetVersion() const {
-  return static_cast<int>(p_files_.size());
-}
-
-int VersionedFile::GetPointingAt() const {
-  return point_at_;
-}
-
-void VersionedFile::PointAt(int point_at) {
-  const auto ver = GetVersion();
-  if (ver <= point_at) {
-    point_at = ver - 1;
-  }
-  p_ = p_files_.at(ver - point_at - 1);
-  point_at_ = point_at;
-}
-
-const std::string VersionedFile::GetFullPath() const {
-  if (p_ == nullptr) {
-    return std::string();
-  }
-  return p_->GetFullPath();
-}
-
-size_t VersionedFile::GetSize() const {
-  if (p_ == nullptr) {
-    return 0;
-  }
-  return p_->GetSize();
-}
-
-off_t VersionedFile::Seek(off_t offset, int whence) {
-  if (p_ == nullptr) {
-    return 0;
-  }
-  return p_->Seek(offset, whence);
-}
-
-size_t VersionedFile::Read(size_t size, void *dest) {
-  if (p_ == nullptr) {
-    return 0;
-  }
-  return p_->Read(size, dest);
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -826,8 +705,10 @@ size_t VersionedFile::Read(size_t size, void *dest) {
 OSDirectory::OSDirectory(const std::string &path) {
   dirp_ = ::opendir(path.c_str());
   if (dirp_) {
-    const auto delim_pos = path.find_last_of(kPathDelim);
-    name_ = (delim_pos == std::string::npos) ? path : path.substr(0, delim_pos);
+    name_ = relpath2abspath(path);
+    if (*name_.crbegin() == kPathDelim) {
+      name_.pop_back();
+    }
   }
 }
 
@@ -842,92 +723,183 @@ OSDirectory::~OSDirectory() {
   }
 }
 
-bool OSDirectory::IsOpened() const {
+bool OSDirectory::IsOpen() const noexcept {
   return (dirp_ != nullptr);
 }
 
-// incomplete
-const std::string OSDirectory::GetFullPath() const {
+bool OSDirectory::IsDirectory() const noexcept {
+  return (dirp_ != nullptr);
+}
+
+std::string OSDirectory::GetName() const noexcept {
+  static std::regex re_name("^.*[\\\\/]([^\\\\/]*)$");
+  std::smatch match;
+  if (std::regex_match(name_, match, re_name)) {
+    return match[1].str();
+  } else {
+    return std::string();
+  }
+}
+
+std::string OSDirectory::GetLocation() const noexcept {
+  static std::regex re_location("^(.*[\\\\/])(?:[^\\\\/]*)$");
+  std::smatch match;
+  if (std::regex_match(name_, match, re_location)) {
+    return match[1].str();
+  } else {
+    return std::string();
+  }
+}
+
+std::string OSDirectory::GetFullPath() const noexcept {
   return name_;
 }
 
-File* OSDirectory::OpenFile(const std::string &filename) const {
+OSFile* OSDirectory::OpenFile(const std::string &filename) const noexcept {
   std::string abs_filename = name_;
   if (filename[0] != kPathDelim) {
-    abs_filename.append(kPathDelim, 1);
+    abs_filename.reserve(abs_filename.size() + 1 + filename.size());
+    abs_filename.append(1, kPathDelim);
+  } else {
+    abs_filename.reserve(abs_filename.size() + filename.size());
   }
   abs_filename.append(filename);
   OSFile *file = new OSFile(abs_filename);
-  if (file->IsOpened() == false) {
+  if (file->IsOpen() == false) {
     delete file;
     file = nullptr;
   }
   return file;
 }
 
-MLibDirectory::MLibDirectory(const MLibPtr &mlib)
-  : p_dir_(mlib) {
-  if (p_dir_->IsFile()) {
-    p_dir_.reset();
+OSDirectory* OSDirectory::OpenDirectory(const std::string& dirname) const noexcept {
+  if (dirp_ == nullptr) return nullptr;
+  seekdir(dirp_, 0);
+  OSDirectory* p_dir = nullptr;
+  struct dirent* dp;
+  while ((dp = readdir(dirp_)) != nullptr) {
+    if (dirname != dp->d_name) continue;
+#ifndef _WINDOWS
+    if (dp->d_type != DT_DIR) continue;
+#endif
+    p_dir = new OSDirectory(GetFullPath() + kPathDelim + dp->d_name);
+    if ( !p_dir->IsOpen() ) {
+      delete p_dir;
+      return nullptr;
+    } else {
+      return p_dir;
+    }
   }
+  return nullptr;
 }
 
-MLibDirectory::MLibDirectory(const std::string &path, const std::string &product)
-  : MLibDirectory(MLib::Open(path, product)) {}
-
-MLibDirectory::MLibDirectory(MLibDirectory &&d) noexcept
-  : p_dir_(d.p_dir_) {
-  d.p_dir_ = nullptr;
+OSEntry* OSDirectory::OpenChild(const std::string& child_name) const noexcept {
+  if (dirp_ == nullptr) return nullptr;
+  seekdir(dirp_, 0);
+  OSEntry* p_entry;
+  struct dirent* dp;
+  while ((dp = readdir(dirp_)) != nullptr) {
+    if (child_name != dp->d_name) continue;
+#ifdef _WINDOWS
+    p_entry = new OSFile(child_name);
+    if (p_entry->IsOpen() == false) {
+      delete p_entry;
+      p_entry = new OSDirectory(child_name);
+    }
+#else
+    if (dp->d_type == DT_DIR) {
+      p_entry = new OSDirectory(child_name);
+    } else {
+      p_entry = new OSFile(child_name);
+    }
+#endif
+    if ( !p_entry->IsOpen() ) {
+      delete p_entry;
+      return nullptr;
+    } else {
+      return p_entry;
+    }
+  }
+  return nullptr;
 }
 
-MLibDirectory::~MLibDirectory() {}
-
-bool MLibDirectory::IsOpened() const {
-  return (p_dir_ != nullptr);
+std::vector<OSEntry*> OSDirectory::GetChildren() const noexcept {
+  if (dirp_ == nullptr) return std::vector<OSEntry*>();
+  std::vector<OSEntry*> ret;
+  seekdir(dirp_, 0);
+  OSEntry* p;
+  struct dirent* dp;
+  while ((dp = readdir(dirp_)) != nullptr) {
+    std::string child_name(name_);
+    child_name.append(1, kPathDelim).append(dp->d_name);
+#ifdef _WINDOWS
+    p = new OSFile(child_name);
+    if (p->IsOpen() == false) {
+      delete p;
+      p = new OSDirectory(child_name);
+    }
+#else
+    if (dp->d_type == DT_DIR) {
+      p = new OSDirectory(child_name);
+    } else {
+      p = new OSFile(child_name);
+    }
+#endif
+    if (p->IsOpen() == false) {
+      delete p;
+      continue;
+    }
+    ret.push_back(p);
+  }
+  return ret;
 }
 
-const std::string MLibDirectory::GetFullPath() const {
-  if (p_dir_ == nullptr) {
-    return std::string();
+////////////////////////////////////////////////////////////////////////
+// Versioned Entry Class Definitions
+////////////////////////////////////////////////////////////////////////
+
+VersionedEntry::VersionedEntry()
+  : p_os_entry_(nullptr), p_curr_(nullptr), curr_ver_(0) {}
+
+VersionedEntry::VersionedEntry(OSEntry* p_os_entry,
+                               std::vector<MLibPtr>&& mlib_history) noexcept
+  : p_os_entry_(p_os_entry), mlib_entries_(std::move(mlib_history)),
+    p_curr_(nullptr), curr_ver_(0) {
+  if (p_os_entry && p_os_entry->IsOpen()) {
+    name_ = p_os_entry->GetFullPath();
+  } else if ( !mlib_entries_.empty() ) {
+    name_ = mlib_entries_[0]->GetFullPath();
   }
-  return MLib::FormatOldStylePath(p_dir_->GetLibraryName(), p_dir_->GetLocation(), p_dir_->GetName());
+  SwitchVersion(-1);
 }
 
-File *MLibDirectory::OpenFile(const std::string &filename) const {
-  if (p_dir_ == nullptr) {
-    return nullptr;
+VersionedEntry::VersionedEntry(const std::string& path,
+                               const std::string& product) 
+  : p_curr_(nullptr), curr_ver_(0) {
+  // 1. Open an OS entry.
+  OSEntry* p_os_entry = new OSFile(path);
+  if (p_os_entry->IsOpen() == false) {
+    delete p_os_entry;
+    p_os_entry = new OSDirectory(path);
+    if (p_os_entry->IsOpen() == false) {
+      delete p_os_entry;
+      p_os_entry = nullptr;
+    }
   }
-  MLibEmbbedFile *file = new MLibEmbbedFile(p_dir_->GetEntry(filename));
-  if (file->IsOpened() == false) {
-    delete file;
-    file = nullptr;
-  }
-  return file;
-}
-
-VersionedDirectory::VersionedDirectory(const std::string &path, const std::string &product)
-  : p_(nullptr), point_at_(-1) {
-  OSDirectory *p_os_dir = new OSDirectory(path);
-  if (p_os_dir->IsOpened()) {
-    p_dirs_.push_back(p_os_dir);
-  } else {
-    delete p_os_dir;
-    p_os_dir = nullptr;
-  }
+  p_os_entry_ = p_os_entry;
+  // 2. Open mlib entries.
   std::string path_left = path;
   std::string path_right = "";
-  std::vector<MLibPtr> mlib_entries;
   while (path_left.empty() == false) {
+#if 0
     std::printf("[Debug] try to open '%s?%s' (product: %s)\n",
                 path_left.c_str(), path_right.c_str(), product.c_str());
-    if (GetVersionedMLibEntry(path_left, product, path_right, &mlib_entries, false)) {
-      p_dirs_.reserve(p_dirs_.size() + mlib_entries.size());
-      for (const auto &p_mlib : mlib_entries) {
-        p_dirs_.push_back(new MLibDirectory(p_mlib));
-      }
-      mlib_entries.clear();
+#endif
+    mlib_entries_ = GetMLibEntryHistory(path_left, product, path_right);
+    if (mlib_entries_.empty() == false) {
       break;
     }
+    // [left, right] : ["foo/bar", "baz"] => ["foo", "bar/baz"]
     const auto delim_pos = path_left.find_last_of(kPathDelim);
     if (delim_pos == std::string::npos) {
       break;
@@ -938,63 +910,186 @@ VersionedDirectory::VersionedDirectory(const std::string &path, const std::strin
     path_right.insert(0, path_left.substr(delim_pos + 1));
     path_left.erase(delim_pos);
   }
-  if (p_dirs_.empty() == false) {
-    p_ = p_dirs_[0];
-    point_at_ = static_cast<int>(p_dirs_.size());
+  if (p_os_entry_ != nullptr || mlib_entries_.empty() == false) {
+    SwitchVersion(-1);
+    name_ = relpath2abspath(path);
   }
 }
 
-VersionedDirectory::~VersionedDirectory() {
-  for (auto &p : p_dirs_) {
-    if (p) delete p;
+VersionedEntry::VersionedEntry(VersionedEntry&& e) noexcept
+  : p_os_entry_(e.p_os_entry_),
+    mlib_entries_(std::move(e.mlib_entries_)),
+    name_(std::move(e.name_)),
+    p_curr_(e.p_curr_), curr_ver_(e.curr_ver_) {
+  e.p_os_entry_ = nullptr;
+}
+
+VersionedEntry::~VersionedEntry() {
+  if (p_os_entry_) {
+    delete p_os_entry_;
   }
 }
 
-bool VersionedDirectory::IsOpened() const {
-  return (p_dirs_.empty() == false);
+int VersionedEntry::GetLatestVersion() const noexcept {
+  return (p_os_entry_ ? 1 : 0) + static_cast<int>(mlib_entries_.size());
 }
 
-int VersionedDirectory::GetVersion() const {
-  return static_cast<int>(p_dirs_.size());
+int VersionedEntry::GetCurrentVersion() const noexcept {
+  return curr_ver_;
 }
 
-int VersionedDirectory::GetPointingAt() const {
-  return point_at_;
-}
-
-void VersionedDirectory::PointAt(int point_at) {
-  const auto ver = GetVersion();
-  if (ver <= point_at) {
-    point_at = ver - 1;
-  }
-  p_ = p_dirs_.at(ver - point_at - 1);
-  point_at_ = point_at;
-}
-
-const std::string VersionedDirectory::GetFullPath() const {
-  if (p_ == nullptr) {
-    return std::string();
-  }
-  return p_->GetFullPath();
-}
-
-VersionedFile *VersionedDirectory::OpenFile(const std::string &filename) const {
-  std::vector<File *> files;
-  files.reserve(p_dirs_.size());
-  for (const auto &d : p_dirs_) {
-    File *f = d->OpenFile(filename);
-    if (f && f->IsOpened()) {
-      files.push_back(f);
+void VersionedEntry::SwitchVersion(int new_version) noexcept {
+  if (GetLatestVersion() == 0) return;
+  if (new_version > 0) {
+    int i = static_cast<int>(mlib_entries_.size()) - new_version;
+    if (i >= 0) {
+      p_curr_ = mlib_entries_[i].get();
+      curr_ver_ = new_version;
     } else {
-      delete f;
+      if (p_os_entry_) {
+        p_curr_ = p_os_entry_;
+      } else {
+        p_curr_ = mlib_entries_[0].get();
+      }
+      curr_ver_ = GetLatestVersion();
+    }
+  } else if (new_version < 0) {
+    int i = (p_os_entry_ ? -2 : -1) - new_version;
+    if (i >= static_cast<int>(mlib_entries_.size())) {
+      i = static_cast<int>(mlib_entries_.size()) - 1;
+    }
+    if (i >= 0) {
+      p_curr_ = mlib_entries_[i].get();
+      curr_ver_ = static_cast<int>(mlib_entries_.size()) - i;
+    } else {
+      if (p_os_entry_) {
+        p_curr_ = p_os_entry_;
+      } else {
+        p_curr_ = mlib_entries_[0].get();
+      }
+      curr_ver_ = GetLatestVersion();
     }
   }
-  VersionedFile *ret = new VersionedFile(std::move(files));
-  if (ret->IsOpened() == false) {
-    delete ret;
-    ret = nullptr;
+}
+
+bool VersionedEntry::IsOpen() const noexcept {
+  return p_curr_ && p_curr_->IsOpen();
+}
+
+bool VersionedEntry::IsFile() const noexcept {
+  return p_curr_ && p_curr_->IsFile();
+}
+
+bool VersionedEntry::IsDirectory() const noexcept {
+  return p_curr_ && p_curr_->IsDirectory();
+}
+
+bool VersionedEntry::IsRaw() const noexcept {
+  return p_curr_ && p_curr_->IsRaw();
+}
+
+std::string VersionedEntry::GetName() const noexcept {
+  static std::regex re_name("^.*[\\\\/]([^\\\\/]*)$");
+  std::smatch match;
+  if (std::regex_match(name_, match, re_name)) {
+    // std::cout << name_ <<  " -> " << match.str() << std::endl;
+    return match[1].str();
+  } else {
+    // std::cout << name_ << std::endl;
+    return std::string();
   }
-  return ret;
+}
+
+std::string VersionedEntry::GetLocation() const noexcept {
+  static std::regex re_location("^(.*[\\\\/])(?:[^\\\\/]*)$");
+  std::smatch match;
+  if (std::regex_match(name_, match, re_location)) {
+    return match[1].str();
+  } else {
+    return std::string();
+  }
+}
+
+std::string VersionedEntry::GetFullPath() const noexcept {
+  return name_;
+}
+
+size_t VersionedEntry::GetSize() const noexcept {
+  if (p_curr_ == nullptr) return 0UL;
+  return p_curr_->GetSize();
+}
+
+off_t VersionedEntry::Seek(off_t offset, int whence) noexcept {
+  if (p_curr_ == nullptr) return -1;
+  return p_curr_->Seek(offset, whence);
+}
+
+size_t VersionedEntry::Read(size_t size, void* dest) noexcept(false) {
+  if (p_curr_ == nullptr) return 0UL;
+  return p_curr_->Read(size, dest);
+}
+
+VersionedEntry* VersionedEntry::OpenChild(const std::string& child_name) const noexcept {
+  OSEntry* p_os_child = nullptr;
+  std::vector<MLibPtr> mlib_child_history;
+  if (p_os_entry_ && p_os_entry_->IsDirectory()) {
+    OSDirectory* p_osdir = dynamic_cast<OSDirectory*>(p_os_entry_);
+    assert(p_osdir);
+    p_os_child = p_osdir->OpenChild(child_name);
+    if (p_os_child && !p_os_child->IsOpen()) {
+      delete p_os_child;
+      p_os_child = nullptr;
+    }
+  }
+  mlib_child_history.reserve(mlib_entries_.size());
+  for (auto& p_mlib : mlib_entries_) {
+    assert(p_mlib != nullptr);
+    if ( !p_mlib->IsDirectory() ) continue;
+    auto p_mlib_child = p_mlib->GetEntry(child_name);
+    if ( p_mlib_child == nullptr || !p_mlib_child->IsOpen() ) continue;
+    mlib_child_history.push_back(std::move(p_mlib_child));
+  }
+  return new VersionedEntry(p_os_child, std::move(mlib_child_history));
+}
+
+std::vector<VersionedEntry*> VersionedEntry::GetChildren() const noexcept {
+  std::map<std::string, VersionedEntry*> children_map;
+  if (p_os_entry_ && p_os_entry_->IsDirectory()) {
+    OSDirectory* p_osdir = dynamic_cast<OSDirectory*>(p_os_entry_);
+    assert(p_osdir);
+    std::vector<OSEntry*> os_children = p_osdir->GetChildren();
+    for (auto& p_child : os_children) {
+      const auto name = p_child->GetName();
+      VersionedEntry* p_entry = new VersionedEntry;
+      p_entry->p_os_entry_ = p_child;
+      p_entry->name_ = name_ + kPathDelim + name;
+      children_map.insert(std::make_pair(name, p_entry));
+    }
+  }
+  for (auto& p_mlib : mlib_entries_) {
+    if ( !p_mlib->IsDirectory() ) continue;
+    std::vector<MLibPtr> mlib_children = p_mlib->GetChildren();
+    for (auto& p_mlib_child : mlib_children) {
+      const auto& name = p_mlib_child->name();
+      auto it = children_map.find(name);
+      if (it == children_map.end()) {
+        VersionedEntry* p_entry = new VersionedEntry;
+        p_entry->mlib_entries_.push_back(p_mlib_child);
+        p_entry->name_ = name_ + kPathDelim + name;
+        children_map.insert(std::make_pair(name, p_entry));
+      } else {
+        it->second->mlib_entries_.push_back(p_mlib_child);
+      }
+    }
+  }
+  std::vector<VersionedEntry*> children;
+  children.reserve(children_map.size());
+  for (auto it = children_map.begin(); it != children_map.end(); ) {
+    it->second->SwitchVersion(curr_ver_);
+    children.push_back(it->second);
+    it = children_map.erase(it);
+  }
+  return children;
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -1054,20 +1149,19 @@ std::string UTF16ToUTF8(const std::u16string &src) {
 // LibReader Create Functions
 ////////////////////////////////////////////////////////////////////////
 
-LibReader *CreateReader(const std::string &filename, const std::string &product) {
-  int fd = ::open(filename.c_str(), O_RDONLY);
-  if (fd == -1) return nullptr;
+Reader *CreateReader(const std::string &filename, const std::string &product) {
   const KeyInfo *kinfo;
   if (FindKeyInfo(product, &kinfo) == false ||
       kinfo->cipher_type() == CipherType::kCipherNone) {
-    return new UnencryptedLibReader(fd);
+    return new PlainReader(filename);
   } else if (kinfo->cipher_type() == CipherType::kCipherCamellia128) {
-    return new EncryptedLibReader(fd, kinfo->key_string());
+    // return new EncryptedLibReader(fp, kinfo->key_string());
+    return new CamelliaDecrypter(filename, kinfo->key_string());
   } else if (kinfo->cipher_type() == CipherType::kCipherEqualMoreThanSLT) {
-    return new EncryptedLibReader2(fd, kinfo->key_string());
+    return new SecondCryptoDecrypter(filename, kinfo->key_string());
+  } else {
+    return nullptr;
   }
-  ::close(fd);
-  return nullptr;
 }
 
 ////////////////////////////////////////////////////////////////////////

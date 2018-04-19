@@ -16,10 +16,13 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  */
 
-#include <algorithm>
+// require for low-level file control
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+
 #include <unistd.h>
+#include <algorithm>
 #include <iostream>
 #include <iomanip>
 #include <fstream>
@@ -28,315 +31,218 @@
 #include "reader.h"
 
 namespace {
-
 inline unsigned int rotl(unsigned int data, unsigned int bits) {
  return (data << bits) | (data >> (32 - bits));
 }
-
 inline unsigned int rotr(unsigned int data, unsigned int bits) {
  return (data >> bits) | (data << (32 - bits));
 }
-
 } // namespace
 
 namespace mlib {
 
-const size_t LibReader::kCacheSize = 65536;
+bool Reader::verbose_ = false;
 
-LibReader::LoadInfo::LoadInfo()
-  : mutex_(), cond_(),
-    load_cache_no_(-1), load_page_no_(SIZE_MAX), load_size_(0),
-    terminate_(false) {
-  pthread_mutex_init(&mutex_, NULL);
-  pthread_cond_init(&cond_, NULL);
+streambuf_base::streambuf_base()
+    : std::streambuf(), fd_(-1), file_size_(0UL) {
+  static_assert(kBufferSize % 16 == 0, "invalid buffer size");
+  // setg(buff_, nullptr, buff_ + sizeof(buff_));
+  setg(nullptr, nullptr, nullptr);
+  setp(nullptr, nullptr);
 }
 
-LibReader::LoadInfo::~LoadInfo() {
-  pthread_cond_destroy(&cond_);
-  pthread_mutex_destroy(&mutex_);
+streambuf_base::~streambuf_base() {
+  close();
 }
 
-////////////////////////////////////////////////////////////////////////
-// LibReader Class Function Definitions
-////////////////////////////////////////////////////////////////////////
-
-LibReader::LibReader(int fd)
-  : fd_(fd), file_size_(0), cache_(), page_no_(), cache_length_(),
-    pt_(), load_info_(), is_verbose_(false) {
+streambuf_base *streambuf_base::open(const std::string &filename) {
+  int fd = ::open(filename.c_str(), O_RDONLY);
+  if (fd == -1) return nullptr;
+  if (fd_ != -1) close();
   struct stat st;
   ::fstat(fd, &st);
+  fd_ = fd;
   file_size_ = st.st_size;
-
-  cache_[0] = new char[kCacheSize];
-  cache_[1] = new char[kCacheSize];
-  page_no_[0] = SIZE_MAX;
-  page_no_[1] = SIZE_MAX;
-  cache_length_[0] = 0;
-  cache_length_[1] = 0;
-
-  pthread_create(&pt_, NULL, &LoadEntry, this);
+  return this;  
 }
 
-LibReader::~LibReader() {
-  pthread_mutex_lock(&load_info_.mutex_);
-  load_info_.load_cache_no_ = -1;
-  load_info_.terminate_ = true;
-  pthread_cond_broadcast(&load_info_.cond_);
-  pthread_mutex_unlock(&load_info_.mutex_);
-  pthread_cancel(pt_);
-  pthread_join(pt_, NULL);
-
-  delete [] cache_[1];
-  delete [] cache_[0];
+bool streambuf_base::is_open() const {
+  return (fd_ != -1);
 }
 
-bool LibReader::IsVerbose() const {
-  return is_verbose_;
+streambuf_base *streambuf_base::close() {
+  if (fd_ == -1) return nullptr;
+  ::close(fd_);
+  file_size_ = 0UL;
+  return this;
 }
 
-void LibReader::Verbose(bool b) {
-  is_verbose_ = b;
-}
-
-int LibReader::fd() const {
-  return fd_;
-}
-
-size_t LibReader::GetSize() const {
+size_t streambuf_base::size() const {
   return file_size_;
 }
 
-void *LibReader::LoadEntry(void *args) {
-  LibReader *reader = reinterpret_cast<LibReader *>(args);
-  LibReader::LoadInfo &load_info = reader->load_info_;
-
-  volatile int load_cache_no;
-  size_t load_page_no;
-  size_t load_size;
-  off_t file_pointer = ::lseek(reader->fd_, 0, SEEK_CUR);
-  off_t offset;
-
-  do {
-    pthread_mutex_lock(&load_info.mutex_);
-    while (load_info.load_cache_no_ == -1) {
-      if (load_info.terminate_ == true) {
-        break;
-      }
-      pthread_cond_wait(&load_info.cond_, &load_info.mutex_);
-    }
-    if (load_info.terminate_ == true) {
-      pthread_mutex_unlock(&load_info.mutex_);
-      break;
-    }
-    assert(load_info.load_cache_no_ != -1);
-    load_cache_no = load_info.load_cache_no_;
-    load_page_no = load_info.load_page_no_;
-    load_size = load_info.load_size_;
-    pthread_mutex_unlock(&load_info.mutex_);
-
-    assert(load_cache_no != -1);
-
-    offset = load_page_no * reader->kCacheSize;
-    if (offset != file_pointer) {
-      if (reader->IsVerbose()) {
-        std::printf("Move the file pointer from %lld to %lld.\n", file_pointer, offset);
-      }
-      file_pointer = offset;
-      ::lseek(reader->fd_, offset, SEEK_SET);
-    }
-    if (reader->IsVerbose()) {
-      std::printf("Load data 0x%08llx-0x%08llx into cache[%d]. (Page Number: %ld, Size: %ld)\n",
-                  offset, offset + load_size - 1,
-                  load_cache_no, load_page_no, load_size);
-    }
-    ssize_t read_size = ::read(reader->fd_, reader->cache_[load_cache_no], load_size);
-    if (0 <= read_size) {
-      file_pointer += read_size;
-    }
-
-    pthread_mutex_lock(&load_info.mutex_);
-    load_info.load_cache_no_ = -1;
-    load_info.load_size_ = read_size;
-    pthread_cond_broadcast(&load_info.cond_);
-    pthread_mutex_unlock(&load_info.mutex_);
-  } while (true);
-  return NULL;
+streambuf_base *streambuf_base::setbuf(char *, std::streamsize) {
+  return this;
 }
 
-bool LibReader::LoadAsync(int cache_no, size_t page_no, size_t length) {
-  pthread_mutex_lock(&load_info_.mutex_);
-  load_info_.load_cache_no_ = cache_no;
-  load_info_.load_page_no_ = page_no;
-  load_info_.load_size_ = length;
-  pthread_cond_broadcast(&load_info_.cond_);
-  pthread_mutex_unlock(&load_info_.mutex_);
-  return true;
-}
-
-size_t LibReader::WaitLoad() {
-  pthread_mutex_lock(&load_info_.mutex_);
-  while (load_info_.load_cache_no_ != -1) {
-    pthread_cond_wait(&load_info_.cond_, &load_info_.mutex_);
+std::streampos streambuf_base::seekoff(std::streamoff off,
+                                       std::ios_base::seekdir way,
+                                       std::ios_base::openmode which) {
+  if ( (which & std::ios_base::in) != std::ios_base::in ) {
+    return std::streampos(std::streamoff(-1));
   }
-  size_t load_size = load_info_.load_size_;
-  pthread_mutex_unlock(&load_info_.mutex_);
-  return load_size;
-}
-
-size_t LibReader::Read(size_t offset, size_t length, void* dest) {
-  if (length == 0) return 0;
-  if (file_size_ <= offset) return 0;
-  if (file_size_ < offset + length) {
-    length = file_size_ - offset;
+  const auto prev_pos = calculate_pos();
+  // convert 'off' into the absolute position
+  switch (way) {
+  case std::ios_base::beg:
+    break;
+  case std::ios_base::cur:
+    off += prev_pos;
+    break;
+  case std::ios_base::end:
+    off += file_size_;
+    break;
+  default:
+    return std::streampos(std::streamoff(-1));
   }
-
-  size_t read_page_no = offset / kCacheSize;
-  size_t read_cache_offset = offset % kCacheSize;
-  const size_t read_last_page_no = (offset + length - 1) / kCacheSize;
-
-  int load_cache_no = -1;
-  int read_cache_no = -1;
-  size_t load_page_no = read_page_no;
-  size_t load_remain_count = (read_last_page_no + 1) - read_page_no;
-
-  if (load_page_no == page_no_[0]) {
-    if (IsVerbose()) {
-      std::printf("Hit cache[0]! (Page Number: %ld)\n", page_no_[0]);
-    }
-    ++load_page_no;
-    --load_remain_count;
-    load_cache_no = load_remain_count == 0 ? -1 : 1;
-    read_cache_no = 0;
-  } else if (load_page_no == page_no_[1]) {
-    if (IsVerbose()) {
-      std::printf("Hit cache[1]! (Page Number: %ld)\n", page_no_[1]);
-    }
-    ++load_page_no;
-    --load_remain_count;
-    load_cache_no = load_remain_count == 0 ? -1 : 0;
-    read_cache_no = 1;
+  const auto new_pos = ::lseek(fd_, off, SEEK_SET);
+  if (new_pos == -1) {
+    setg(nullptr, nullptr, nullptr);
+    return std::streampos(new_pos);
+  }
+  if (new_pos == prev_pos) {
+#if 0
+    std::cerr << "mlib::streambuf: WARNING: the file position doesn't need to be changed."
+              << " (pos = " << new_pos << ")" << std::endl;
+#endif
+    return std::streampos(new_pos);
+  }
+#if 0
+  std::cerr << "mlib::streambuf: seeked to " << new_pos << "." << std::endl;
+#endif
+  const auto prev_gindex = prev_pos % kBufferSize;
+  const auto prev_aligned_pos = prev_pos - prev_gindex;
+  const auto new_gindex = new_pos % kBufferSize;
+  const auto new_aligned_pos = new_pos - new_gindex; 
+  if (prev_aligned_pos != new_aligned_pos) {
+    setg(nullptr, nullptr, nullptr);
   } else {
-    if (IsVerbose()) {
-      std::printf("Not hit cache. (Page Number: %ld)\n", load_page_no);
-    }
-    load_cache_no = (load_page_no + 1 == page_no_[0]) ? 1 : 0;
-    read_cache_no = -1;
+    setg(eback(), eback() + new_gindex, egptr());
   }
-
-  size_t total_read_size = 0;
-  size_t load_size = 0;
-  size_t read_size = 0;
-
-  do {
-    if (load_cache_no != -1) {
-      load_size = std::min(kCacheSize, file_size_ - (load_page_no * kCacheSize));
-      LoadAsync(load_cache_no, load_page_no, load_size);
-    }
-    if (read_cache_no != -1) {
-      read_size = std::min(cache_length_[read_cache_no] - read_cache_offset, length - total_read_size);
-      if (IsVerbose()) {
-        std::printf("Read data 0x%08lx-0x%08lx from cache[%d]. (Page Number: %ld, Size: %ld)\n",
-                    read_page_no*kCacheSize + read_cache_offset,
-                    read_page_no*kCacheSize + read_cache_offset + read_size - 1,
-                    read_cache_no, read_page_no, read_size);
-      }
-      MemoryCopy(cache_[read_cache_no], read_page_no, read_cache_offset, read_size,
-                 reinterpret_cast<unsigned char*>(dest) + total_read_size);
-      total_read_size += read_size;
-      if (length <= total_read_size || load_cache_no == -1) break;
-      // read_cache_no = (read_cache_no == 0) ? 1 : 0;
-      ++read_page_no;
-      read_cache_offset = 0;
-    }
-    if (load_cache_no != -1) {
-      cache_length_[load_cache_no] = WaitLoad();
-      page_no_[load_cache_no] = load_page_no;
-      // read_page_no = load_page_no;
-      read_cache_no = load_cache_no;
-      ++load_page_no;
-      --load_remain_count;
-      // std::printf("Loaded Remain: %ld\n", load_remain_count);
-      if (load_remain_count == 0) {
-        load_cache_no = -1;
-      } else {
-        load_cache_no = (load_cache_no == 0) ? 1 : 0;
-      }
-    }
-  } while (true);
-
-  return total_read_size;
+  return std::streampos(new_pos);
 }
 
-////////////////////////////////////////////////////////////////////////
-// UnencryptedLibReader Class Function Definitions
-////////////////////////////////////////////////////////////////////////
-
-UnencryptedLibReader::UnencryptedLibReader(int fd) : LibReader(fd) {}
-
-size_t UnencryptedLibReader::MemoryCopy(char *cache, size_t /*page_no*/, size_t offset, size_t length, void *dest) {
-  ::memcpy(dest, cache + offset, length);
-  return length;
+std::streampos streambuf_base::seekpos(std::streampos pos,
+                                       std::ios_base::openmode which) {
+  return seekoff(pos, std::ios_base::beg, which);
 }
 
-////////////////////////////////////////////////////////////////////////
-// EncryptedLibReader Class Function Definitions
-////////////////////////////////////////////////////////////////////////
-
-EncryptedLibReader::EncryptedLibReader(int fd, const unsigned char key_string[16])
-  : LibReader(fd),
-    cache_(new unsigned char[kCacheSize]), cache_offset_(SIZE_MAX), cache_length_(0) {
-  Camellia_Ekeygen(128, key_string, key_table_);
-}
-
-EncryptedLibReader::~EncryptedLibReader() {
-  delete [] cache_;
-}
-
-size_t EncryptedLibReader::MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void* dest) {
-  size_t file_offset = page_no * kCacheSize + offset;
-  size_t file_aligned_offset = file_offset & ~0x0f;
-  size_t aligned_offset = file_aligned_offset - (page_no * kCacheSize);
-  size_t aligned_length = (length + (file_offset & 0x0f) + 0x0f) & ~0x0f;
-  assert(aligned_offset + aligned_length <= kCacheSize);
-
-  if (file_aligned_offset != cache_offset_ || aligned_length != cache_length_) {
-    cache_offset_ = file_aligned_offset;
-    cache_length_ = aligned_length;
-
-    unsigned char block_tmp[16];
-    const unsigned int *p = reinterpret_cast<unsigned int *>(cache + aligned_offset);
-    unsigned int *const q = reinterpret_cast<unsigned int *>(block_tmp);
-    for (size_t i = 0; i < aligned_length; i += 16) {
-      int roll_bits = ( ((file_aligned_offset + i) >> 4) & 0x0f ) + 16;
-      q[0] = rotl(p[0], roll_bits);
-      q[1] = rotr(p[1], roll_bits);
-      q[2] = rotl(p[2], roll_bits);
-      q[3] = rotr(p[3], roll_bits);
-      Camellia_DecryptBlock(128, block_tmp, key_table_, cache_ + i);
-      p += 4;
+std::streamsize streambuf_base::xsgetn(char *s, std::streamsize n) {
+  if (fd_ == -1 || s == nullptr) return 0;
+  std::streamsize read_bytes = 0;
+  while (read_bytes < n) {
+    if (gptr() == nullptr || gptr() >= egptr()) {
+      int c = underflow();
+      if (c == EOF) break;
     }
+    assert(gptr() != nullptr);
+    auto to_read_bytes = std::min(egptr() - gptr(), n - read_bytes);
+#if 0
+    std::cerr << "mlib::streambuf: memcpy(" << (void*)s <<  ", "
+              << (void*)gptr() << ", " << to_read_bytes << ")." << std::endl;
+#endif
+    ::memcpy(s + read_bytes, gptr(), to_read_bytes);
+    gbump(to_read_bytes);
+    read_bytes += to_read_bytes;
   }
-
-  ::memcpy(dest, cache_ + (offset & 0x0f), length);
-
-  return length;
+  return read_bytes;
 }
 
-////////////////////////////////////////////////////////////////////////
-// EncryptedLibReader2 Class Function Definitions
-////////////////////////////////////////////////////////////////////////
-
-EncryptedLibReader2::EncryptedLibReader2(int fd, const unsigned char key_string[16])
-  : LibReader(fd),
-    key_{0}, cache_(new char[kCacheSize]), cache_offset_(SIZE_MAX), cache_length_(0) {
-  ::memcpy(key_, key_string, 16);
+int streambuf_base::underflow() {
+  auto pos = calculate_pos();
+  if (pos == -1 || pos >= static_cast<off_t>(file_size_)) {
+    return EOF;
+  }
+#if 0
+  std::cerr << "mlib::streambuf starts underflow()."
+            << " (eback = " << (void*)eback() << ", gptr = " << (void*)gptr()
+            << ", egptr = " << (void*)egptr() << ")" << std::endl;
+  std::cerr << "mlib::streambuf: calculated pos: the value is " << pos << std::endl;
+#endif
+  const auto gindex = pos % kBufferSize;
+  off_t gpos = pos - gindex;
+  gpos = ::lseek(fd_, gpos, SEEK_SET);
+  if (gpos == -1) {
+    std::cerr << "mlib::streambuf::underflow(): lseek error." << std::endl;
+    return EOF;
+  }
+  const auto read_bytes = ::read(fd_, buf_, kBufferSize);
+#if 0
+  if (read_bytes < kBufferSize) {
+    std::cerr << "mlib::streambuf::underflow(): reach EOF. (read "
+              << read_bytes << " bytes from " << gpos << ")" << std::endl;
+  }
+#endif
+  if (read_bytes == -1 || gindex >= read_bytes) {
+    std::cerr << "mlib::streambuf::underflow(): unknown error." << std::endl;
+    return EOF;
+  }
+  ::lseek(fd_, gpos, SEEK_SET);
+  setg(buf_, buf_ + gindex, buf_ + read_bytes);
+  rewrite_buffer(gpos, eback(), read_bytes);
+#if 0
+  std::cerr << "mlib::streambuf ends underflow() successfully."
+            << " (buffered size = " << read_bytes << ", gindex = " << gindex << ")" << std::endl;
+#endif
+  // convert CHAR(-1) into not INT(-1) (means EOF) but INT(255)
+  return *reinterpret_cast<unsigned char *>(gptr());
 }
 
-EncryptedLibReader2::~EncryptedLibReader2() {
-  delete [] cache_;
+int streambuf_base::uflow() {
+  int c = underflow();
+  if (c == EOF) return EOF;
+  gbump(1);
+  return c;
 }
 
-size_t EncryptedLibReader2::MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void* dest) {
+int streambuf_base::overflow(int) {
+  return EOF;
+}
+
+off_t streambuf_base::calculate_pos() {
+  if (fd_ == -1) return -1;
+  auto fd_pos = ::lseek(fd_, 0, SEEK_CUR);
+  if (fd_pos == -1) return -1;
+  auto pos = (gptr() == nullptr) ? fd_pos :
+             (fd_pos - (fd_pos % kBufferSize)) + (gptr() - eback());
+  return pos;
+}
+
+void camelliabuf::rewrite_buffer(off_t pos, char *buf, std::streamsize n) {
+  assert(pos % 16 == 0);
+  assert(n % 16 == 0);
+  auto block_pos = pos >> 4; // (pos / 16)
+  auto block_count = n >> 4; // (n / 16)
+  unsigned char cipher[16];
+  unsigned char *plaintext = reinterpret_cast<unsigned char *>(buf);
+  const unsigned int *p = reinterpret_cast<const unsigned int *>(buf);
+  unsigned int *const q = reinterpret_cast<unsigned int *>(cipher);
+  int roll_bits = (block_pos & 0x0f) | 0x10;
+  for (decltype(block_count) i = 0; i < block_count; ++i) {
+    q[0] = rotl(p[0], roll_bits);
+    q[1] = rotr(p[1], roll_bits);
+    q[2] = rotl(p[2], roll_bits);
+    q[3] = rotr(p[3], roll_bits);
+    Camellia_DecryptBlock(128, cipher, key_table_, plaintext);
+    p += 4;
+    plaintext += 16;
+    roll_bits = ((roll_bits + 1) & 0x0f) | 0x10;
+  }
+}
+
+void crypto2buf::rewrite_buffer(off_t pos, char *buf, std::streamsize n) {
+  assert(pos % 16 == 0);
+  assert(n % 16 == 0);
 
   static const unsigned char rotate_table[0x20] = {
     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x09,
@@ -345,47 +251,118 @@ size_t EncryptedLibReader2::MemoryCopy(char *cache, size_t page_no, size_t offse
     0x1C, 0x1D, 0x1E, 0x1F, 0x04, 0x0C, 0x14, 0x1C
   };
 
-  size_t file_offset = page_no * kCacheSize + offset;
-  size_t file_aligned_offset = file_offset & ~0x0f;
-  size_t aligned_offset = file_aligned_offset - (page_no * kCacheSize);
-  size_t aligned_length = (length + (file_offset & 0x0f) + 0x0f) & ~0x0f;
-  assert(aligned_offset + aligned_length <= kCacheSize);
+  auto block_pos = pos >> 4;
+  const auto block_epos = block_pos + (n >> 4);
+  char *p = buf;
+  unsigned int *dwp = reinterpret_cast<unsigned int *>(buf);
+  const int i = pos & 0xf;  // always 0
+  while (block_pos < block_epos) {
+    const char p_i = p[i];
+    for (int j = 0; j < 0x10; ++j) {
+      if (j != i) { p[j] ^= p_i; }
+    }
+    const char roll1 = rotate_table[(block_pos + 0x00) & 0x1f];
+    const char roll2 = rotate_table[(block_pos + 0x0c) & 0x1f];
+    dwp[0] = rotr(rotr(key_[0], roll1) ^ dwp[0], roll2);
+    const char roll3 = rotate_table[(block_pos + 0x03) & 0x1f];
+    const char roll4 = rotate_table[(block_pos + 0x0f) & 0x1f];
+    dwp[1] = rotl(rotl(key_[1], roll3) ^ dwp[1], roll4);
+    const char roll5 = rotate_table[(block_pos + 0x06) & 0x1f];
+    const char roll6 = rotate_table[(block_pos - 0x0e) & 0x1f];
+    dwp[2] = rotr(rotr(key_[2], roll5) ^ dwp[2], roll6);
+    const char roll7 = rotate_table[(block_pos + 0x09) & 0x1f];
+    const char roll8 = rotate_table[(block_pos - 0x0b) & 0x1f];
+    dwp[3] = rotl(rotl(key_[3], roll7) ^ dwp[3], roll8);
+    p += 16;
+    dwp += 4;
+    ++block_pos;
+  }
+}
 
-  if (file_aligned_offset != cache_offset_ || aligned_length != cache_length_) {
-    cache_offset_ = file_aligned_offset;
-    cache_length_ = aligned_length;
-    for (size_t i = 0; i < aligned_length; i += 0x10) {
-      const char *p = cache + aligned_offset + i;
-      char *q = cache_ + i;
-      const int d = (aligned_offset + i) & 0xf;
-      const char p_d = p[d];
-      for (int j = 0; j < 0x10; ++j) {
-        char c = p[j];
-        if (d != j) {
-          c ^= p_d;
-        }
-        q[j] = c;
-      }
-      const size_t block_ofs = (file_aligned_offset + i) >> 4;
-      unsigned int *q_dw = reinterpret_cast<unsigned int *>(q);
-      const char roll1 = rotate_table[(block_ofs + 0x00) & 0x1f];
-      const char roll2 = rotate_table[(block_ofs + 0x0c) & 0x1f];
-      q_dw[0] = rotr(rotr(key_[0], roll1) ^ q_dw[0], roll2);
-      const char roll3 = rotate_table[(block_ofs + 0x03) & 0x1f];
-      const char roll4 = rotate_table[(block_ofs + 0x0f) & 0x1f];
-      q_dw[1] = rotl(rotl(key_[1], roll3) ^ q_dw[1], roll4);
-      const char roll5 = rotate_table[(block_ofs + 0x06) & 0x1f];
-      const char roll6 = rotate_table[(block_ofs - 0x0e) & 0x1f];
-      q_dw[2] = rotr(rotr(key_[2], roll5) ^ q_dw[2], roll6);
-      const char roll7 = rotate_table[(block_ofs + 0x09) & 0x1f];
-      const char roll8 = rotate_table[(block_ofs - 0x0b) & 0x1f];
-      q_dw[3] = rotl(rotl(key_[3], roll7) ^ q_dw[3], roll8);
+size_t Reader::Read(off_t offset, size_t length, void *dest) {
+  const auto file_size = GetSize();
+  if (static_cast<size_t>(offset) >= file_size) return 0;
+  std::istream *input_stream = istream();
+  if (input_stream == nullptr) return 0;
+  input_stream->seekg(offset);
+  if (input_stream->rdstate() & std::ios_base::failbit) {
+    std::cerr << "mlib::streambuf: failed to seekg(" << offset << ")." << std::endl;
+    return 0UL;
+  }
+  char *s = static_cast<char *>(dest);
+#if 0
+  std::cerr << "mlib::streambuf: read " << length << " bytes from offset "
+            << offset << "." << std::endl; 
+#endif
+  input_stream->read(s, length);
+  if (input_stream->rdstate() & std::ios_base::failbit) {
+    if ( (input_stream->rdstate() & std::ios_base::eofbit) == 0 ) {
+      std::cerr << "mlib::streambuf: failed to read." << std::endl;
+      return 0;
+    } else {
+      const size_t read_bytes = file_size - offset;
+#if 0
+      std::cerr << "mlib::streambuf: reach EOF (read "
+                << read_bytes << " bytes)." << std::endl;
+#endif
+      return read_bytes;
     }
   }
+  const size_t read_bytes = input_stream->tellg() - offset;
+#if 0
+  std::cerr << "mlib::streambuf: read " << read_bytes << " bytes successfully." << std::endl;
+#endif
+  return read_bytes;
+}
 
-  ::memcpy(dest, cache_ + (offset & 0x0f), length);
+PlainReader::PlainReader(const std::string &filename)
+  : input_stream_(filename) {
+  if (input_stream_.is_open() == false) {
+    file_size_ = 0;
+  } else {
+    input_stream_.seekg(0, std::ios_base::end);
+    file_size_ = input_stream_.tellg();
+    input_stream_.seekg(0, std::ios_base::beg);
+  }
+}
 
-  return length;
+size_t PlainReader::GetSize() const {
+  return file_size_;
+}
+
+std::istream *PlainReader::istream() {
+  return &input_stream_;
+}
+
+CamelliaDecrypter::CamelliaDecrypter(const std::string &filename, const unsigned char key_string[16])
+  : stream_buf_(key_string), input_stream_(&stream_buf_) {
+  stream_buf_.open(filename.c_str());
+  file_size_ = stream_buf_.size();
+  input_stream_.rdbuf(&stream_buf_);
+}
+
+size_t CamelliaDecrypter::GetSize() const {
+  return file_size_;
+}
+
+std::istream *CamelliaDecrypter::istream() {
+  return &input_stream_;
+}
+
+SecondCryptoDecrypter::SecondCryptoDecrypter(const std::string &filename,
+                                             const unsigned char key_string[16])
+  : stream_buf_(key_string), input_stream_(&stream_buf_) {
+  stream_buf_.open(filename.c_str());
+  file_size_ = stream_buf_.size();
+  input_stream_.rdbuf(&stream_buf_);
+}
+
+size_t SecondCryptoDecrypter::GetSize() const {
+  return file_size_;
+}
+
+std::istream *SecondCryptoDecrypter::istream() {
+  return &input_stream_;
 }
 
 } // namespace mlib

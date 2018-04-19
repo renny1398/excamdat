@@ -1,7 +1,7 @@
 #pragma once
 
-/* reader.h (updated on 2017/02/16)
- * Copyright (C) 2016 renny1398.
+/* reader.h (updated on 2018/04/18)
+ * Copyright (C) 2016-2018 renny1398.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -19,96 +19,114 @@
  */
 
 #include <stdint.h>
-#include <pthread.h>
 #include <string>
-#include <set>
 #include "camellia.h"
 
 namespace mlib {
 
-class LibReader {
+// Interface
+class Reader {
 public:
-  explicit LibReader(int fd);
-  virtual ~LibReader();
+  virtual ~Reader() = default;
+  bool IsVerbose() const { return verbose_; }
+  void Verbose(bool verbose = true) { verbose_ = verbose; }
 
-  bool IsVerbose() const;
-  void Verbose(bool b = true);
-
-  int fd() const;
-  size_t GetSize() const;
-
-  size_t Read(size_t offset, size_t length, void *dest);
+  virtual size_t GetSize() const = 0;
+  virtual size_t Read(off_t offset, size_t length, void *dest);  
 
 protected:
-  virtual size_t MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void *dest) = 0;
+  virtual std::istream *istream() = 0;
+  static bool verbose_;
+};
 
-  static const size_t kCacheSize;
+class streambuf_base : public std::streambuf {
+public:
+  streambuf_base();
+  virtual ~streambuf_base();
 
+  streambuf_base *open(const std::string &filename);
+  bool is_open() const;
+  streambuf_base *close();
+
+  size_t size() const;
+
+protected:
+  streambuf_base *setbuf(char *s, std::streamsize n) override;
+  std::streampos seekoff(std::streamoff off, std::ios_base::seekdir way,
+                         std::ios_base::openmode which) override;
+  std::streampos seekpos(std::streampos pos, std::ios_base::openmode which) override;
+  std::streamsize xsgetn(char *s, std::streamsize n) override;
+  int underflow() override;
+  int uflow() override;
+  int overflow(int c) override;
+  virtual void rewrite_buffer(off_t pos, char *buf, std::streamsize n) = 0;
 private:
-  bool LoadAsync(int cache_no, size_t page_no, size_t length);
-  size_t WaitLoad();
+  off_t calculate_pos();
 
-  static void *LoadEntry(void *args);
-
-  friend class MLibReaderTest;
-
+  static const unsigned int kBufferSize = 4096;
+  char buf_[kBufferSize];
   int fd_;
   size_t file_size_;
-
-  char *cache_[2];
-  size_t page_no_[2];
-  size_t cache_length_[2];
-
-  struct LoadInfo {
-    pthread_mutex_t mutex_;
-    pthread_cond_t cond_;
-    int load_cache_no_;
-    size_t load_page_no_;
-    size_t load_size_;
-    bool terminate_;
-    LoadInfo();
-    ~LoadInfo();
-  };
-  pthread_t pt_;
-  LoadInfo load_info_;
-
-  bool is_verbose_;
 };
 
-class UnencryptedLibReader : public LibReader {
+class camelliabuf : public streambuf_base {
 public:
-  UnencryptedLibReader(int fd);
+  camelliabuf(const unsigned char key_string[16]) : streambuf_base() {
+    Camellia_Ekeygen(128, key_string, key_table_);
+  }
 protected:
-  size_t MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void *dest) override;
-};
-
-class EncryptedLibReader : public LibReader {
-public:
-  EncryptedLibReader(int fd, const unsigned char key_string[16]);
-  ~EncryptedLibReader() override;
-  static bool LoadKeyInfo(const std::string &csv);
-  static void PrintKeyTable(const KEY_TABLE_TYPE key_table);
-protected:
-  size_t MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void *dest) override;
+  void rewrite_buffer(off_t pos, char *buf, std::streamsize n) override;
 private:
   KEY_TABLE_TYPE key_table_;
-  unsigned char *cache_;
-  size_t cache_offset_;
-  size_t cache_length_;
 };
 
-class EncryptedLibReader2 : public LibReader {
+class crypto2buf : public streambuf_base {
 public:
-  EncryptedLibReader2(int fd, const unsigned char key_string[16]);
-  ~EncryptedLibReader2() override;
-  static bool LoadKeyInfo(const std::string &csv);
+  crypto2buf(const unsigned char key_string[16]) : streambuf_base() {
+    ::memcpy(key_, key_string, 16);
+  }
 protected:
-  size_t MemoryCopy(char *cache, size_t page_no, size_t offset, size_t length, void *dest) override;
+  void rewrite_buffer(off_t pos, char *buf, std::streamsize n) override;
 private:
   unsigned int key_[4];
-  char *cache_;
-  size_t cache_offset_;
-  size_t cache_length_;
 };
 
-}   // namespace mlib
+class PlainReader : public Reader {
+public:
+  PlainReader(const std::string &filename);
+  size_t GetSize() const override;
+protected:
+  std::istream *istream() override;
+private:
+  std::ifstream input_stream_;
+  size_t file_size_;
+};
+
+class CamelliaDecrypter : public Reader {
+public:
+  CamelliaDecrypter(const std::string &filename, const unsigned char key_string[16]);
+  // static bool LoadKeyInfo(const std::string &csv);
+  // static void PrintKeyTable(const KEY_TABLE_TYPE key_table);
+  size_t GetSize() const override;
+protected:
+  std::istream *istream() override;
+private:
+  camelliabuf stream_buf_;
+  std::istream input_stream_;
+  size_t file_size_;
+};
+
+class SecondCryptoDecrypter : public Reader {
+public:
+  SecondCryptoDecrypter(const std::string &filename, const unsigned char key_string[16]);
+  // static bool LoadKeyInfo(const std::string &csv);
+  size_t GetSize() const override;
+protected:
+  std::istream *istream() override;
+private:
+  crypto2buf stream_buf_;
+  std::istream input_stream_;
+  size_t file_size_;
+};
+
+} // namespace mlib

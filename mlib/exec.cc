@@ -27,7 +27,7 @@
 
 namespace {
 
-std::u16string ReadString16(mlib::VersionedFile *p_file, size_t utf16_length) {
+std::u16string ReadString16(mlib::VersionedEntry *p_file, size_t utf16_length) {
   std::u16string ret;
   ret.assign((utf16_length/2), u'\0');
   p_file->Read(utf16_length, &ret[0]);
@@ -1043,7 +1043,7 @@ void ExecTextToXhtml::ChangeColor(int new_color) {
 /// \brief Exec Functions
 ////////////////////////////////////////////////////////////////////////
 
-Exec::Exec(VersionedFile *p_file, const std::string& product)
+Exec::Exec(VersionedEntry *p_file, const std::string& product)
   : p_file_(p_file), product_(product),
     exec1_length_(0), exec2_length_(0), exec3_length_(0),
     exec4_offset_(0), exec5_offset_(0), exec6_offset_(0), exec7_offset_(0) {
@@ -1056,7 +1056,7 @@ Exec::Exec(VersionedFile *p_file, const std::string& product)
 }
 
 bool Exec::ReadExec1() {
-  if (p_file_ == nullptr || p_file_->IsOpened() == false) return false;
+  if (p_file_ == nullptr || p_file_->IsFile() == false) return false;
   p_file_->Seek(0, SEEK_SET);
   int exec1_count;
   p_file_->Read(4, &exec1_count);

@@ -155,7 +155,7 @@ bool get_param(int argc, char **argv, Parameters *params) {
 
 bool decrypt(const std::string &product, const std::string& path) {
   // create reader
-  mlib::LibReader *reader = mlib::CreateReader(path, product);
+  mlib::Reader *reader = mlib::CreateReader(path, product);
   if (reader == nullptr) return false;
   // specify output file name
   size_t ext_pos = path.find_last_of('.');
@@ -179,9 +179,7 @@ bool decrypt(const std::string &product, const std::string& path) {
   }
   ofs.close();
   delete [] buf;
-  int fd = reader->fd();
   delete reader;
-  ::close(fd);
   return true;
 }
 
@@ -231,8 +229,12 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  mlib::MLibPtr lib = mlib::MLib::Open(params.lib_name, params.product_name);
-  if (lib == nullptr) {
+  if ( !params.internal_path.empty() ) {
+    std::cerr << "WARNING: ignore the given internal path (deprecated)."
+              << std::endl;
+  }
+  mlib::VersionedEntry* p_entry = new mlib::VersionedEntry(params.lib_name, params.product_name);
+  if (p_entry == nullptr || !p_entry->IsOpen()) {
     std::cerr << "ERROR: failed to open '" << params.lib_name << "'." << std::endl;
     return -1;
   }
@@ -247,10 +249,9 @@ int main(int argc, char **argv) {
   extractor.SetTexLevel(params.tex_level);
 
   ::signal(SIGINT, &signal_handler);
-  extractor.Extract(lib, params.internal_path, params.output_directory);
+  extractor.Extract(p_entry, params.output_directory);
 
-  lib.reset();
-
+  delete p_entry;
   mlib::Extractor::Finalize();
 
   return 0;

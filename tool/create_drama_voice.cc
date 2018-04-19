@@ -46,13 +46,13 @@ int main(int argc, char **argv) {
   if (base_entry_path.back() == mlib::kPathDelim) {
     base_entry_path.pop_back();
   }
-  auto *base_entry = new mlib::VersionedDirectory(base_entry_path, product_name);
-  if (base_entry->IsOpened() == false) {
+  auto *base_entry = new mlib::VersionedEntry(base_entry_path, product_name);
+  if (base_entry->IsDirectory() == false) {
     std::cerr << "ERROR: failed to open a voice directory." << std::endl;
     delete base_entry;
     return -1;
   }
-  std::cout << "Voice version is " << base_entry->GetVersion() << '.' << std::endl;
+  std::cout << "Voice version is " << base_entry->GetCurrentVersion() << '.' << std::endl;
 
   const std::string text_name(argv[2]);
   std::ifstream exec7(text_name);
@@ -101,8 +101,8 @@ int main(int argc, char **argv) {
       voice_filename.assign(chara_name);
       voice_filename.push_back(mlib::kPathDelim);
       voice_filename.append(voice_name);
-      auto *voice_entry = base_entry->OpenFile(voice_filename);
-      if (voice_entry == nullptr || voice_entry->IsOpened() == false) {
+      auto *voice_entry = base_entry->OpenChild(voice_filename);
+      if (voice_entry == nullptr || voice_entry->IsFile() == false) {
         if (voice_entry) {
           delete voice_entry;
           voice_entry = nullptr;
@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
         continue;
       }
       std::cout << voice_entry->GetFullPath();
-      std::cout << " (Ver. " << voice_entry->GetVersion() << ") -> ";
+      std::cout << " (Ver. " << voice_entry->GetCurrentVersion() << ") -> ";
       const auto file_size = voice_entry->GetSize();
       char *buf = new char[file_size];
       voice_entry->Seek(0, 0);

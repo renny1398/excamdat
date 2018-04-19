@@ -25,6 +25,7 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
+#include <memory>
 #include "reader.h"
 #include "extractor.h"
 
@@ -35,44 +36,44 @@ const char png_header[] = "\x89PNG\x0d\x0a\x1a\x0a";
 
 Sint64 sdl_custom_size(struct SDL_RWops *context) {
   using namespace mlib;
-  MLib *mlib = reinterpret_cast<MLib *>(context->hidden.unknown.data1);
-  return static_cast<Sint64>(mlib->GetFileSize());
+  VersionedEntry* p_entry = reinterpret_cast<VersionedEntry*>(context->hidden.unknown.data1);
+  return static_cast<Sint64>(p_entry->GetSize());
 }
 
 Sint64 sdl_custom_seek(struct SDL_RWops *context, Sint64 offset, int whence) {
   using namespace mlib;
-  MLib *mlib = reinterpret_cast<MLib *>(context->hidden.unknown.data1);
-  return mlib->Seek(offset, whence);
+  VersionedEntry* p_entry = reinterpret_cast<VersionedEntry*>(context->hidden.unknown.data1);
+  return p_entry->Seek(offset, whence);
 }
 
 size_t sdl_custom_read(struct SDL_RWops *context, void *ptr, size_t size, size_t maxnum) {
   using namespace mlib;
-  MLib *mlib = reinterpret_cast<MLib *>(context->hidden.unknown.data1);
+  VersionedEntry* p_entry = reinterpret_cast<VersionedEntry*>(context->hidden.unknown.data1);
   char *char_ptr = reinterpret_cast<char *>(ptr);
   size_t read_size = size * maxnum;
   size_t ret = 0;
-  off_t pos = mlib->Tell();
+  off_t pos = p_entry->Seek(0, SEEK_CUR); /*p_entry->Tell();*/
   if (pos < 8 && reinterpret_cast<char *>(context->hidden.unknown.data2) == mgf_header) {
     const size_t header_read_size = std::min(static_cast<unsigned long long>(8), pos + read_size) - pos;
     ::memcpy(char_ptr, png_header + pos, header_read_size);
     char_ptr += header_read_size;
     read_size -= header_read_size;
-    mlib->Seek(header_read_size, SEEK_CUR);
+    p_entry->Seek(header_read_size, SEEK_CUR);
     ret = header_read_size;
   }
-  ret += mlib->Read(read_size, char_ptr);
+  ret += p_entry->Read(read_size, char_ptr);
   return ret;
 }
 
-size_t sdl_custom_write(struct SDL_RWops */*context*/, const void */*ptr*/, size_t /*size*/, size_t /*num*/) {
+size_t sdl_custom_write(struct SDL_RWops* /*context*/, const void* /*ptr*/, size_t /*size*/, size_t /*num*/) {
   return 0;
 }
 
-int sdl_custom_close(struct SDL_RWops */*context*/) {
+int sdl_custom_close(struct SDL_RWops* /*context*/) {
   return 0;
 }
 
-SDL_RWops *SDL_RWFromMLib(const mlib::MLibPtr &mlib) {
+SDL_RWops *SDL_RWFromMLib(mlib::VersionedEntry* p_entry) {
   SDL_RWops *rwops;
   rwops = SDL_AllocRW();
   if (rwops) {
@@ -82,18 +83,18 @@ SDL_RWops *SDL_RWFromMLib(const mlib::MLibPtr &mlib) {
     rwops->write = &sdl_custom_write;
     rwops->close = &sdl_custom_close;
     rwops->type = SDL_RWOPS_UNKNOWN;
-    rwops->hidden.unknown.data1 = mlib.get();
-    if (8 <= mlib->GetFileSize()) {
+    rwops->hidden.unknown.data1 = p_entry;
+    if (8 <= p_entry->GetSize()) {
       char buf[8];
-      mlib->Seek(0, SEEK_SET);
-      mlib->Read(8, buf);
+      p_entry->Seek(0, SEEK_SET);
+      p_entry->Read(8, buf);
       if (::memcmp(buf, mgf_header, 8) == 0) {
         rwops->hidden.unknown.data2 = static_cast<void *>(mgf_header);
       } else {
         rwops->hidden.unknown.data2 = nullptr;
       }
     }
-    mlib->Seek(0, SEEK_SET);
+    p_entry->Seek(0, SEEK_SET);
   }
   return rwops;
 }
@@ -101,14 +102,6 @@ SDL_RWops *SDL_RWFromMLib(const mlib::MLibPtr &mlib) {
 } // namespace
 
 namespace mlib {
-
-#ifdef _WINDOWS
-const char Extractor::kDelim = '\\';
-const char Extractor::kDelimNotUsed = '/';
-#else
-const char Extractor::kDelim = '/';
-const char Extractor::kDelimNotUsed = '\\';
-#endif
 
 void Extractor::Initialize() {
   SDL_Init(SDL_INIT_VIDEO);
@@ -120,27 +113,29 @@ void Extractor::Finalize() {
   IMG_Quit();
 }
 
-bool Extractor::TexCat(const MLibPtr &dzi, const MLibPtr &tex_entry, const std::string &fs_path, std::vector<char> &buf) {
-  const unsigned int dzi_size = dzi->GetFileSize();
+bool Extractor::TexCat(VersionedEntry* p_dzi, const VersionedEntry* p_tex_entry, const std::string &fs_path, std::vector<char> &buf) {
+  assert(p_dzi != nullptr && p_dzi->IsFile() &&
+         p_tex_entry != nullptr && p_tex_entry->IsDirectory());
+  const unsigned int dzi_size = p_dzi->GetSize();
   std::vector<char> dzi_buf(dzi_size + 1, 0);
-  char *dzi_ptr = &dzi_buf[0];
-  off_t file_pos_tmp = dzi->Tell();
-  dzi->Seek(0, SEEK_SET);
-  dzi->Read(dzi_size, dzi_ptr);
-  dzi->Seek(file_pos_tmp, SEEK_SET);
+  char* dzi_ptr = &dzi_buf[0];
+  off_t file_pos_tmp = p_dzi->Seek(0, SEEK_CUR); /*p_dzi->Tell();*/
+  p_dzi->Seek(0, SEEK_SET);
+  p_dzi->Read(dzi_size, dzi_ptr);
+  p_dzi->Seek(file_pos_tmp, SEEK_SET);
   dzi_ptr[dzi_size] = '\0';
 
   if (dzi_ptr[0] != 'D' || dzi_ptr[1] != 'Z' || dzi_ptr[2] != 'I') {
-    return Extract(dzi, fs_path, buf);
+    return Extract(p_dzi, fs_path, buf);
   }
 
-  const std::string out_name_base(dzi->GetName().substr(0, dzi->GetName().size() - 4));
+  const std::string out_name_base(p_dzi->GetName().substr(0, p_dzi->GetName().length() - 4));
 
   dzi_ptr += 3;
   while (::isspace(*dzi_ptr)) { ++dzi_ptr; }
 
-  std::cout << "-- Extracting '" << dzi->GetLocation() << kDelim
-            << dzi->GetName() << "' as PNG file...";
+  std::cout << "-- Extracting '" << p_dzi->GetFullPath()
+            << "' as PNG file...";
   std::cout.flush();
 
   try {
@@ -184,12 +179,12 @@ bool Extractor::TexCat(const MLibPtr &dzi, const MLibPtr &tex_entry, const std::
           std::replace(tex_name.begin(), tex_name.end(), '\\', '/');
   #endif
           if (tex_name.empty()) continue;
-          MLibPtr tex_file = tex_entry->GetEntry(tex_name + ".mgf");
-          if (tex_file == nullptr) {
-            tex_file = tex_entry->GetEntry(tex_name + ".png");
-            if (tex_file == nullptr) {
-              tex_file = tex_entry->GetEntry(tex_name + ".webp");
-              if (tex_file == nullptr) {
+          VersionedEntry* p_tex_file = p_tex_entry->OpenChild(tex_name + ".mgf");
+          if (p_tex_file == nullptr || !p_tex_file->IsFile()) {
+            p_tex_file = p_tex_entry->OpenChild(tex_name + ".png");
+            if (p_tex_file == nullptr || !p_tex_file->IsFile()) {
+              p_tex_file = p_tex_entry->OpenChild(tex_name + ".webp");
+              if (p_tex_file == nullptr || !p_tex_file->IsFile()) {
                 if (warning_caused == false) {
                   warning_caused = true;
                   std::cout << std::endl;
@@ -202,7 +197,7 @@ bool Extractor::TexCat(const MLibPtr &dzi, const MLibPtr &tex_entry, const std::
           }
           // std::cout << " -- Loading " << tex_file->GetName() << "...";
           // std::cout.flush();
-          SDL_RWops *rwops = SDL_RWFromMLib(tex_file);
+          SDL_RWops *rwops = SDL_RWFromMLib(p_tex_file);
           SDL_Surface *tex_surface = IMG_Load_RW(rwops, 0);
           SDL_BlitSurface(tex_surface, nullptr, surface, &rect);
           SDL_FreeSurface(tex_surface);
@@ -219,7 +214,7 @@ bool Extractor::TexCat(const MLibPtr &dzi, const MLibPtr &tex_entry, const std::
       out_name.append(".png");
       // std::cout << " -- Saving as '" << out_name << "'...";
       std::string out_fullname(fs_path);
-      out_fullname.append(1, kDelim);
+      out_fullname.append(1, kPathDelim);
       out_fullname.append(out_name);
       IMG_SavePNG(surface, out_fullname.c_str());
       SDL_FreeSurface(surface);
@@ -228,32 +223,38 @@ bool Extractor::TexCat(const MLibPtr &dzi, const MLibPtr &tex_entry, const std::
       }
       if (l == texlv_) break;
     }
-  } catch (std::invalid_argument &e) {
+  } catch (std::invalid_argument& e) {
     std::cout << "Skipped because this file is wrong." << std::endl;
     return false;
   }
   return true;
 }
 
-bool Extractor::Extract(const MLibPtr &mlib, const std::string &fs_path, std::vector<char> &buf) {
+bool Extractor::Extract(VersionedEntry* p_entry, const std::string& fs_path, std::vector<char> &buf) {
+  if (p_entry == nullptr || !p_entry->IsOpen()) return false;
+  if (p_entry->IsRaw()) {
+    std::cout << "-- Skip extracting '" << p_entry->GetFullPath()
+              << "' because it's a raw entry." << std::endl;
+    return true;
+  }
 
-  const std::string& entry_name = mlib->GetName();
+  const std::string entry_name = p_entry->GetName();
   std::string fs_path_tmp = fs_path;
 
-  if (mlib->IsFile()) {
-    unsigned int size = mlib->GetFileSize();
-    std::cout << "-- Extracting '" << mlib->GetLocation() << kDelim
-              << entry_name << "'...";
+  if (p_entry->IsFile()) {
+    unsigned int size = p_entry->GetSize();
+    std::cout << "-- Extracting '" << p_entry->GetFullPath()
+              << "'(" << entry_name << ")...";
     std::cout.flush();
 
-    off_t file_pos_tmp = mlib->Tell();
-    mlib->Seek(0, SEEK_SET);
+    off_t file_pos_tmp = p_entry->Seek(0, SEEK_CUR); /*p_entry->Tell()*/;
+    p_entry->Seek(0, SEEK_SET);
     if (buf.size() < size) {
       buf.assign(size, 0);
     }
     char *const buf_ptr = &buf[0];
-    size = mlib->Read(size, buf_ptr);
-    mlib->Seek(file_pos_tmp, SEEK_SET);
+    size = p_entry->Read(size, buf_ptr);
+    p_entry->Seek(file_pos_tmp, SEEK_SET);
 
     size_t entry_ext_index = entry_name.find_last_of(".");
     const std::string entry_ext =
@@ -282,7 +283,7 @@ bool Extractor::Extract(const MLibPtr &mlib, const std::string &fs_path, std::ve
     } else {
       std::ofstream ofs(fs_path_tmp.c_str(), std::ios::out | std::ios::binary);
       if (ofs.is_open() == false) {
-        std::cerr << "cannot create the file '" << fs_path_tmp << "'.";
+        std::cerr << "failed to create the file '" << fs_path_tmp << "'.";
         std::cout << std::endl;
         return false;
       }
@@ -300,72 +301,66 @@ bool Extractor::Extract(const MLibPtr &mlib, const std::string &fs_path, std::ve
     if (::stat(fs_path_tmp.c_str(), &st) != 0) {
       ::mkdir(fs_path_tmp.c_str(), 0755);
     }
-    fs_path_tmp.push_back(kDelim);
+    if ( !entry_name.empty() ) {
+      fs_path_tmp.push_back(kPathDelim);
+    }
   }
 
-  MLibPtr tex_entry;
+  VersionedEntry* p_tex_entry = nullptr;
   if (texcat_) {
-    tex_entry = mlib->Child("tex");
+    p_tex_entry = p_entry->OpenChild("tex");
+    if (p_tex_entry && !p_tex_entry->IsDirectory()) {
+      delete p_tex_entry;
+      p_tex_entry = nullptr;
+    }
   }
-  const unsigned int child_number = mlib->GetChildNumber();
-  for (unsigned int i = 0; stop_ == false && i < child_number; ++i) {
-    MLibPtr child = mlib->Child(i);
-    const std::string &child_name = child->GetName();
+#if 1
+  std::cout << "[Info] Extractor: start searching the children of '"
+            << p_entry->GetFullPath() << "'(" << p_entry->GetName()
+            << ")." << std::endl;
+#endif
+  std::vector<VersionedEntry*> children = p_entry->GetChildren();
+  for (auto& p_child : children) {
+    const std::string child_name = p_child->GetName();
     size_t child_name_ext_index = child_name.find_last_of(".");
     const std::string child_ext =
         (child_name_ext_index == std::string::npos) ? "" :
         child_name.substr(child_name.find_last_of("."));
-    assert(child.use_count());
-    if (child == tex_entry ||
+    if ((texcat_ && child_name == "tex") ||
         (svg_ == false && child_ext == ".svg")) {
-      std::cout << "-- Skip '" << mlib->GetLocation() << kDelim
-                << mlib->GetName() << kDelim << child->GetName()
+      std::cout << "-- Skip '" << p_entry->GetFullPath()
                 << "'." << std::endl;
       continue;
     }
-    if (tex_entry && child_ext == ".dzi") {
-      TexCat(child, tex_entry, fs_path_tmp, buf);
+    if (p_tex_entry && child_ext == ".dzi") {
+      TexCat(p_child, p_tex_entry, fs_path_tmp, buf);
     } else {
-      Extract(child, fs_path_tmp, buf);
+      Extract(p_child, fs_path_tmp, buf);
     }
+  }
+  if (p_tex_entry) {
+    delete p_tex_entry;
+  }
+  while ( !children.empty() ) {
+    VersionedEntry* p_child = children.back();
+    delete p_child;
+    children.pop_back();
   }
   return true;
 }
 
-bool Extractor::Extract(const MLibPtr &mlib, const std::string &lib_path, const std::string &fs_path) {
-
+bool Extractor::Extract(VersionedEntry* p_entry, const std::string& fs_path) {
   stop_ = false;
 
-  MLibPtr entry = mlib->GetEntry(lib_path);
-  if (entry == NULL) {
-    return false;
-  }
-
   std::string fs_path_tmp = fs_path;
-#ifdef _WINDOWS
-  std::replace(fs_path_tmp.begin(), fs_path_tmp.end(), '/', '\\');
-  if (fs_path_tmp[fs_path_tmp.size()-1] != '\\') {
-    fs_path_tmp.push_back('\\');
-  }
-#else
-  std::replace(fs_path_tmp.begin(), fs_path_tmp.end(), '\\', '/');
-  if (fs_path_tmp[fs_path_tmp.size()-1] != '/') {
-    fs_path_tmp.push_back('/');
-  }
-#endif
-
-  if (mlib->Parent() == nullptr && mlib->IsDirectory() && mlib->HasOnlyDirectories() == false) {
-    fs_path_tmp.append("data");
-    struct stat st;
-    if (::stat(fs_path_tmp.c_str(), &st) != 0) {
-      ::mkdir(fs_path_tmp.c_str(), 0755);
-    }
-    fs_path_tmp.push_back(kDelim);
+  std::replace(fs_path_tmp.begin(), fs_path_tmp.end(), kPathDelimNotUsed, kPathDelim);
+  if (*fs_path_tmp.crbegin() != kPathDelim) {
+    fs_path_tmp.push_back(kPathDelim);
   }
 
-  std::vector<char> buf;
+  std::vector<char> buf;  // for reading file contents
   const clock_t clk = ::clock();
-  bool ret = Extract(entry, fs_path_tmp, buf);
+  bool ret = Extract(p_entry, fs_path_tmp, buf);
   if (ret == false) {
     std::cerr << "ERROR: failed to extract files." << std::endl;
     return ret;

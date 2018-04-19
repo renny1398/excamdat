@@ -307,7 +307,7 @@ private:
 
 class Exec {
 public:
-  Exec(VersionedFile *p_file, const std::string& product);
+  Exec(VersionedEntry *p_file, const std::string& product);
 
   int GetVariableOffset(const std::string& name) const;
   std::string GetVariableName(int offset) const;
@@ -393,7 +393,7 @@ private:
 
   ExecTextExpression *ParseText(const std::u16string& text);
 
-  VersionedFile *p_file_;
+  VersionedEntry *p_file_;
   const std::string product_;
 
   // meta

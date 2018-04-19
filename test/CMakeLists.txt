@@ -12,8 +12,8 @@ if (CPPUNIT_INCLUDE_DIR AND CPPUNIT_LIBRARY)
 endif (CPPUNIT_INCLUDE_DIR AND CPPUNIT_LIBRARY)
 
 include_directories(..)
-add_executable(reader_test reader_test.cc)
-target_link_libraries(reader_test ${CPPUNIT_LIBRARY} mlib)
-add_test(NAME reader COMMAND $<TARGET_FILE:reader_test>)
+#add_executable(reader_test reader_test.cc)
+#target_link_libraries(reader_test ${CPPUNIT_LIBRARY} mlib)
+#add_test(NAME reader COMMAND $<TARGET_FILE:reader_test>)
 
 add_executable(slt_test slt_test.cc)
