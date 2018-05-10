@@ -656,7 +656,7 @@ void ExecTextToASText::OnChangeMsgFrame(const std::string& src, const std::strin
 /// \brief ExecTextToXhtml Functions
 ////////////////////////////////////////////////////////////////////////
 
-ExecTextToXhtml::ExecTextToXhtml(const std::string& product, bool vertical)
+ExecTextToXhtml::ExecTextToXhtml(const std::string& product, bool /*vertical*/)
   : product_name_(product), base_dir_("."), p_ofs_(nullptr), curr_size_(0), curr_color_(0xffffff) {
   ::mkdir(base_dir_.c_str(), 0755);
   // remove all files and directories in XXX.ebook directory

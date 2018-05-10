@@ -9,7 +9,7 @@ pkg_search_module(SDL2IMAGE REQUIRED SDL2_image>=2.0.0)
 
 include_directories(${SDL2_INCLUDE_DIRS} ${SDL2IMAGE_INCLUDE_DIRS})
 
-add_library(mlib camellia.c cache.cc reader.cc mlib.cc extractor.cc exec.cc vmparser.cc)
+add_library(mlib camellia.c reader.cc mlib.cc extractor.cc exec.cc vmparser.cc)
 
 #find_path(CPPUNIT_INCLUDE_DIR cppunit/Test.h)
 #find_library(CPPUNIT_LIBRARY NAMES cppunit)

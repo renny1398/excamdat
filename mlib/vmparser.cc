@@ -1030,8 +1030,8 @@ void VMParser::ParseCommand(const std::u16string& name) {
     return;
   }
   if (name == u"MALIE_FONTPOSITION") {
-    int pos = vm_stack_.top() & 0x7fffffff;
 #if 0
+    int pos = vm_stack_.top() & 0x7fffffff;
     std::cout << "&MALIE_FONTPOSITION(" << pos
               << ") in " << export_to.GetHigherLabel() << std::endl;
 #endif
