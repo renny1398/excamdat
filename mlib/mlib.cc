@@ -45,12 +45,12 @@ std::string relpath2abspath(const std::string& relpath) {
   std::string abspath;
   std::string curr_relpath;
 #ifdef _WINDOWS
-  static std::regex re("^(?:[A-Za-z]:)?[\\\\/]");
+  static std::regex re_root("^(?:[A-Za-z]:)?[\\\\/]");
 #else
-  static std::regex re_root("^/.*$");
+  static std::regex re_root("^/");
 #endif
   std::smatch match;
-  if (relpath.empty() || !std::regex_match(relpath, match, re_root)) {
+  if (relpath.empty() || !std::regex_search(relpath, match, re_root)) {
     char* cwd = ::getcwd(nullptr, 0);
     abspath.assign(cwd);
     ::free(cwd);    
@@ -61,9 +61,9 @@ std::string relpath2abspath(const std::string& relpath) {
     curr_relpath = relpath.substr(abspath.length(), std::string::npos);
   }
   while ( !curr_relpath.empty() ) {
-    static std::regex re_child("^([\\\\/]*)(?:\\\\|/|$)");
+    static std::regex re_child("^([^\\\\/]+)(?:[\\\\/]|$)");
     static std::regex re_abs_parent("^(.*[\\\\/])[^\\\\/]+[\\\\/]?$");
-    if (!std::regex_match(curr_relpath, match, re_child)) {
+    if (!std::regex_search(curr_relpath, match, re_child)) {
       return std::string();
     }
     if (match[1].str() == "..") {
@@ -75,8 +75,8 @@ std::string relpath2abspath(const std::string& relpath) {
     } else if (match[1].str() == ".") {
       curr_relpath.erase(0, match.str().length());
     } else {
-      curr_relpath.erase(0, match.str().length());
       abspath.append(match.str());
+      curr_relpath.erase(0, match.str().length());
     }
   }
   std::replace(abspath.begin(), abspath.end(),
@@ -89,26 +89,29 @@ std::vector<mlib::MLibPtr> GetMLibEntryHistory(const std::string& mlib_name,
                                                const std::string& mlib_internal_path) {
   static const char *ext[2] = { ".dat", ".lib" };
   std::vector<mlib::MLibPtr> mlib_entries;
-  mlib_entries.reserve(22);
+  mlib_entries.reserve(20); // data.dat, data1.dat, ..., data9.dat, data.lib, data1.lib, ... data9.lib
   const auto ext_pos = mlib_name.find_last_of('.', std::string::npos);
   const std::string mlib_name_without_ext =
       (ext_pos == std::string::npos) ? mlib_name : mlib_name.substr(0, ext_pos);
   const auto delim_pos = mlib_name_without_ext.find_last_of(mlib::kPathDelim, std::string::npos);
   const std::string name =
-      (delim_pos == std::string::npos) ? mlib_name_without_ext : mlib_name_without_ext.substr(0, delim_pos);
+      (delim_pos == std::string::npos) ? mlib_name_without_ext : mlib_name_without_ext.substr(delim_pos + 1);
   std::string fixed_mlib_name;
   for (int i = 0; i < 2; ++i) { // { 0 : ".dat", 1 : ".lib" }
     for (char j = '9'; '0' <= j; --j) {
       fixed_mlib_name.assign(mlib_name_without_ext);
       if (j != '0') fixed_mlib_name.append(1, j);
       fixed_mlib_name.append(ext[i]);
+      // std::cout << "[Info] OpenMLib(" << fixed_mlib_name << ", " << product << ")." << std::endl;
       mlib::MLibPtr p_mlib_base = mlib::MLib::Open(fixed_mlib_name, product);
-      if (p_mlib_base == nullptr) continue;
-      mlib::MLibPtr mlib = p_mlib_base->Child(name);
-      if (mlib == nullptr) mlib = p_mlib_base;
-      mlib = mlib->GetEntry(mlib_internal_path);
-      if (mlib != nullptr) {
-        mlib_entries.push_back(mlib);
+      if (nullptr == p_mlib_base) continue;
+      // std::cout << "[Info] p_mlib_base->Child(" << name << ")." << std::endl;
+      mlib::MLibPtr p_mlib = p_mlib_base->Child(name);
+      if (nullptr == p_mlib) p_mlib = p_mlib_base;
+      // std::cout << "[Info] p_mlib->GetEntry(" << mlib_internal_path << ")." << std::endl;
+      p_mlib = p_mlib->GetEntry(mlib_internal_path);
+      if (nullptr != p_mlib) {
+        mlib_entries.push_back(p_mlib);
       }
     }
   }
@@ -126,14 +129,18 @@ namespace mlib {
 MLib::MLib(const std::string &lib_name, Reader *reader)
   : parent_(), libname_(GenerateFullPath(lib_name)), reader_(reader), file_pos_(0) {
   verbose_= false;
+  if (IsOpen()) {
+    location_ = kPathDelim;
+  }
 }
 
 MLib::MLib(MLib *parent)
   : parent_(parent->self_.lock()), libname_(parent->libname_),
     reader_(parent->reader_), file_pos_(0) {
   verbose_ = parent->verbose_;
+  if (!IsOpen()) return;
   location_.assign(parent->location_);
-  if (location_.empty() == false) {
+  if (location_.size() > 1) {
     location_.push_back(kPathDelim);
   }
   location_.append(parent->GetName());
@@ -180,7 +187,7 @@ MLibPtr MLib::Open(const std::string &filename, const std::string &product) {
 std::string MLib::GetLocation() const noexcept {
   std::string location = location_;
   std::replace(location.begin(), location.end(), '/', '|');
-  return libname() + location + name();
+  return libname() + location;
 }
 
 const MLibPtr MLib::GetOrCreateChild(size_t i) noexcept {
@@ -281,7 +288,7 @@ MLibPtr MLib::GetEntry(const std::string &path, size_t index) noexcept {
     }
     return MLibPtr();
   }
-
+  // pass through if IsDirectory().
   if (target_entry_name == ".") {
     return GetEntry(path, sub_index);
   }
@@ -628,9 +635,16 @@ off_t LIBP_t::GetFileBaseOffset() const noexcept {
 ////////////////////////////////////////////////////////////////////////
 
 OSFile::OSFile(const std::string &name)
-  : fp_(::fopen(name.c_str(), "rb")), name_() {
+  : fp_(nullptr), name_() {
+#ifndef _WINDOWS
+  struct stat st;
+  if (::stat(name.c_str(), &st) == -1) return;
+  if (S_ISDIR(st.st_mode)) return;
+#endif
+  fp_ = ::fopen(name.c_str(), "rb");
   if (fp_ != nullptr) {
     name_.assign(relpath2abspath(name));
+    // std::cout << "[Info] OSFile: opened '" << name_ << "'." << std::endl;
   }
 }
 
@@ -656,7 +670,7 @@ bool OSFile::IsFile() const noexcept {
 std::string OSFile::GetName() const noexcept {
   static std::regex re_name("[\\\\/]([^\\\\/]+)$");
   std::smatch match;
-  if (std::regex_match(name_, match, re_name)) {
+  if (std::regex_search(name_, match, re_name)) {
     return match[1].str();
   } else {
     return std::string();
@@ -709,6 +723,7 @@ OSDirectory::OSDirectory(const std::string &path) {
     if (*name_.crbegin() == kPathDelim) {
       name_.pop_back();
     }
+    // std::cout << "[Info] OSDirectory: opened '" << name_ << "'." << std::endl;
   }
 }
 
@@ -732,9 +747,9 @@ bool OSDirectory::IsDirectory() const noexcept {
 }
 
 std::string OSDirectory::GetName() const noexcept {
-  static std::regex re_name("^.*[\\\\/]([^\\\\/]*)$");
+  static std::regex re_name("[\\\\/]([^\\\\/]+)$");
   std::smatch match;
-  if (std::regex_match(name_, match, re_name)) {
+  if (std::regex_search(name_, match, re_name)) {
     return match[1].str();
   } else {
     return std::string();
@@ -830,6 +845,10 @@ std::vector<OSEntry*> OSDirectory::GetChildren() const noexcept {
   OSEntry* p;
   struct dirent* dp;
   while ((dp = readdir(dirp_)) != nullptr) {
+    if ( dp->d_name[0] == '.' &&
+         (dp->d_name[1] == '\0' || dp->d_name[1] == '.') ) {
+      continue;
+    }
     std::string child_name(name_);
     child_name.append(1, kPathDelim).append(dp->d_name);
 #ifdef _WINDOWS
@@ -845,7 +864,7 @@ std::vector<OSEntry*> OSDirectory::GetChildren() const noexcept {
       p = new OSFile(child_name);
     }
 #endif
-    if (p->IsOpen() == false) {
+    if ( !p->IsOpen() ) {
       delete p;
       continue;
     }
@@ -878,25 +897,31 @@ VersionedEntry::VersionedEntry(const std::string& path,
   : p_curr_(nullptr), curr_ver_(0) {
   // 1. Open an OS entry.
   OSEntry* p_os_entry = new OSFile(path);
-  if (p_os_entry->IsOpen() == false) {
+  if ( !p_os_entry->IsOpen() ) {
     delete p_os_entry;
     p_os_entry = new OSDirectory(path);
-    if (p_os_entry->IsOpen() == false) {
+    if ( !p_os_entry->IsOpen() ) {
       delete p_os_entry;
       p_os_entry = nullptr;
+#if 0
+    } else {
+      std::cout << "[Info] VersionedEntry: open '" << path
+                << "' as a directory." << std::endl;
+#endif
     }
+#if 0
+  } else {
+    std::cout << "[Info] VersionedEntry: open '" << path
+              << "' as a file." << std::endl;
+#endif
   }
   p_os_entry_ = p_os_entry;
   // 2. Open mlib entries.
   std::string path_left = path;
   std::string path_right = "";
-  while (path_left.empty() == false) {
-#if 0
-    std::printf("[Debug] try to open '%s?%s' (product: %s)\n",
-                path_left.c_str(), path_right.c_str(), product.c_str());
-#endif
+  while ( !path_left.empty() ) {
     mlib_entries_ = GetMLibEntryHistory(path_left, product, path_right);
-    if (mlib_entries_.empty() == false) {
+    if ( !mlib_entries_.empty() ) {
       break;
     }
     // [left, right] : ["foo/bar", "baz"] => ["foo", "bar/baz"]
@@ -910,6 +935,12 @@ VersionedEntry::VersionedEntry(const std::string& path,
     path_right.insert(0, path_left.substr(delim_pos + 1));
     path_left.erase(delim_pos);
   }
+#if 0
+  for (auto& p_mlib_entry : mlib_entries_) {
+    std::cout << "[Info] VersionedEntry: open '" << p_mlib_entry->GetFullPath()
+              << "' as a mlib entry." << std::endl;
+  }
+#endif
   if (p_os_entry_ != nullptr || mlib_entries_.empty() == false) {
     SwitchVersion(-1);
     name_ = relpath2abspath(path);
@@ -1064,6 +1095,11 @@ std::vector<VersionedEntry*> VersionedEntry::GetChildren() const noexcept {
       p_entry->p_os_entry_ = p_child;
       p_entry->name_ = name_ + kPathDelim + name;
       children_map.insert(std::make_pair(name, p_entry));
+#if 0
+      std::cout << "[Info] VersionedEntry: open '" << p_entry->GetFullPath()
+                << "' as a child " << (p_entry->IsDirectory() ? "directory" : "file")
+                << "." << std::endl;
+#endif
     }
   }
   for (auto& p_mlib : mlib_entries_) {
@@ -1080,6 +1116,10 @@ std::vector<VersionedEntry*> VersionedEntry::GetChildren() const noexcept {
       } else {
         it->second->mlib_entries_.push_back(p_mlib_child);
       }
+#if 0
+      std::cout << "[Info] VersionedEntry: open '" << p_mlib_child->GetFullPath()
+                << "' as a child " << "mlib entry." << std::endl;
+#endif
     }
   }
   std::vector<VersionedEntry*> children;
@@ -1155,12 +1195,14 @@ Reader *CreateReader(const std::string &filename, const std::string &product) {
       kinfo->cipher_type() == CipherType::kCipherNone) {
     return new PlainReader(filename);
   } else if (kinfo->cipher_type() == CipherType::kCipherCamellia128) {
-    // return new EncryptedLibReader(fp, kinfo->key_string());
     return new CamelliaDecrypter(filename, kinfo->key_string());
   } else if (kinfo->cipher_type() == CipherType::kCipherEqualMoreThanSLT) {
     return new SecondCryptoDecrypter(filename, kinfo->key_string());
   } else {
-    return nullptr;
+    std::ostringstream oss;
+    oss << '\'' << kinfo->cipher_type() << "' is invalid cipher type."
+        << " (product code: " << product << ')';
+    throw std::invalid_argument(oss.str());
   }
 }
 
