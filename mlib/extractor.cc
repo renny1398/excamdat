@@ -31,6 +31,31 @@
 
 namespace {
 
+bool recursive_mkdir(const std::string& dir) {
+  struct stat st;
+  if (::stat(dir.c_str(), &st) == 0) {
+#if 0
+    std::cout << "[Info] the directory '" << dir
+              << "' already exists." << std::endl;
+#endif
+    return true;
+  } else {
+    auto delim_pos = dir.find_last_of(mlib::kPathDelim);
+    if (delim_pos == std::string::npos) return false;
+    auto parent_dir = dir.substr(0, delim_pos);
+    bool result = recursive_mkdir(parent_dir);
+    if (!result) return false;
+    result = (::mkdir(dir.c_str(), 0755) == 0) ? true : false;
+    if (result) {
+      std::cout << "[Info] created a directory '" << dir << "'." << std::endl;
+    } else {
+      std::cerr << "[Error] failed to create a directory '"
+                << dir << "'." << std::endl;
+    }
+    return result;
+  }
+}
+
 /*const*/char mgf_header[] = "\x4d\x61\x6c\x69\x65\x47\x46\0";
 const char png_header[] = "\x89PNG\x0d\x0a\x1a\x0a";
 
@@ -236,19 +261,19 @@ bool Extractor::TexCat(VersionedEntry* p_dzi, const VersionedEntry* p_tex_entry,
 
 bool Extractor::Extract(VersionedEntry* p_entry, const std::string& fs_path, std::vector<char> &buf) {
   if (p_entry == nullptr || !p_entry->IsOpen()) return false;
-  if (p_entry->IsRaw()) {
-    std::cout << "-- Skip extracting '" << p_entry->GetFullPath()
-              << "' because it's a raw entry." << std::endl;
-    return true;
-  }
 
   const std::string entry_name = p_entry->GetName();
   std::string fs_path_tmp = fs_path;
 
   if (p_entry->IsFile()) {
+    if (stop_) return true;
+    if (p_entry->IsRaw()) {
+      std::cout << "-- Skip extracting '" << p_entry->GetFullPath()
+                << "' because of a raw entry." << std::endl;
+      return true;
+    }
     unsigned int size = p_entry->GetSize();
-    std::cout << "-- Extracting '" << p_entry->GetFullPath()
-              << "'(" << entry_name << ")...";
+    std::cout << "-- Extracting '" << p_entry->GetFullPath() << "...";
     std::cout.flush();
 
     off_t file_pos_tmp = p_entry->Seek(0, SEEK_CUR); /*p_entry->Tell()*/;
@@ -300,10 +325,9 @@ bool Extractor::Extract(VersionedEntry* p_entry, const std::string& fs_path, std
   }
 
   if (flatten_ == false) {
-    struct stat st;
     fs_path_tmp.append(entry_name);
-    if (::stat(fs_path_tmp.c_str(), &st) != 0) {
-      ::mkdir(fs_path_tmp.c_str(), 0755);
+    if (false == recursive_mkdir(fs_path_tmp)) {
+      return false;
     }
     if ( !entry_name.empty() ) {
       fs_path_tmp.push_back(kPathDelim);
@@ -320,11 +344,11 @@ bool Extractor::Extract(VersionedEntry* p_entry, const std::string& fs_path, std
   }
 #if 1
   std::cout << "[Info] Extractor: start searching the children of '"
-            << p_entry->GetFullPath() << "'(" << p_entry->GetName()
-            << ")." << std::endl;
+            << p_entry->GetFullPath() << '.' << std::endl;
 #endif
   std::vector<VersionedEntry*> children = p_entry->GetChildren();
   for (auto& p_child : children) {
+    if (stop_) break;
     const std::string child_name = p_child->GetName();
     size_t child_name_ext_index = child_name.find_last_of(".");
     const std::string child_ext =
@@ -342,6 +366,10 @@ bool Extractor::Extract(VersionedEntry* p_entry, const std::string& fs_path, std
       Extract(p_child, fs_path_tmp, buf);
     }
   }
+#if 1
+  std::cout << "[Info] Extractor: end searching the children of '"
+            << p_entry->GetFullPath() << '.' << std::endl;
+#endif
   if (p_tex_entry) {
     delete p_tex_entry;
   }
@@ -353,20 +381,29 @@ bool Extractor::Extract(VersionedEntry* p_entry, const std::string& fs_path, std
   return true;
 }
 
-bool Extractor::Extract(VersionedEntry* p_entry, const std::string& fs_path) {
+bool Extractor::Extract(VersionedEntry* p_entry, const std::string& /*fs_path*/) {
   stop_ = false;
 
+#if 0
   std::string fs_path_tmp = fs_path;
   std::replace(fs_path_tmp.begin(), fs_path_tmp.end(), kPathDelimNotUsed, kPathDelim);
   if (*fs_path_tmp.crbegin() != kPathDelim) {
     fs_path_tmp.push_back(kPathDelim);
   }
-
+#else
+  std::cerr << "[Warning] Extractor: the given output path will be ignored." << std::endl;
+  if ( !p_entry->IsDirectory() ) {
+    std::cerr << "[Error] Extractor: failed to open '" << p_entry->GetFullPath()
+              << "' as a directory." << std::endl;
+    return false;
+  }
+  std::string fs_path_tmp = p_entry->GetLocation();
+#endif
   std::vector<char> buf;  // for reading file contents
   const clock_t clk = ::clock();
   bool ret = Extract(p_entry, fs_path_tmp, buf);
   if (ret == false) {
-    std::cerr << "ERROR: failed to extract files." << std::endl;
+    std::cerr << "[Error] Extractor: failed to extract files." << std::endl;
     return ret;
   }
   double elapsed = static_cast<double>(::clock() - clk) / CLOCKS_PER_SEC;

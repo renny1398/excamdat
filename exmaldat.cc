@@ -187,6 +187,7 @@ static mlib::Extractor extractor;
 
 void signal_handler(int) {
   extractor.Stop();
+  std::cerr << "[Info] sent a stop signal." << std::endl;
 }
 
 int main(int argc, char **argv) {

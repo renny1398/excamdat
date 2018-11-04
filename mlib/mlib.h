@@ -252,7 +252,7 @@ public:
    * @see Entry::GetFullPath()
    */
   std::string GetFullPath() const noexcept override final {
-    return GetLocation() + name();
+    return GetLocation() + '|' + name();
   }
 
   /**
