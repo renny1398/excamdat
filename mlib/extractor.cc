@@ -145,14 +145,17 @@ bool Extractor::TexCat(VersionedEntry* p_dzi, const VersionedEntry* p_tex_entry,
     int width = std::stoi(token);
     std::getline(ss, token);
     int height = std::stoi(token);
+    // std::cerr << "DEBUG: DZI (width, height) = (" << width << ", " << height << ')' << std::endl;
     std::getline(ss, token);
     const int lv_max = std::stoi(token);
+    // std::cerr << "DEBUG: DZI levels = " << lv_max << std::endl;
 
     for (int l = 0; l < lv_max; ++l, width >>= 1, height >>= 1) {
       std::getline(ss, token, ',');
       const int cols = std::stoi(token);
       std::getline(ss, token);
       const int rows = std::stoi(token);
+      // std::cerr << "DEBUG: DZI level " << l << " (cols, rows) = (" << cols << ", " << rows << ')' << std::endl;
 
       if (0 <= texlv_ && l != texlv_) {
         for (int i = 0; i < rows; ++i) {
@@ -178,6 +181,7 @@ bool Extractor::TexCat(VersionedEntry* p_dzi, const VersionedEntry* p_tex_entry,
   #ifndef _WINDOWS
           std::replace(tex_name.begin(), tex_name.end(), '\\', '/');
   #endif
+          // std::cerr << "DEBUG: col_name = " << tex_name << std::endl;
           if (tex_name.empty()) continue;
           VersionedEntry* p_tex_file = p_tex_entry->OpenChild(tex_name + ".mgf");
           if (p_tex_file == nullptr || !p_tex_file->IsFile()) {
@@ -195,7 +199,7 @@ bool Extractor::TexCat(VersionedEntry* p_dzi, const VersionedEntry* p_tex_entry,
               }
             }
           }
-          // std::cout << " -- Loading " << tex_file->GetName() << "...";
+          // std::cout << " -- Loading " << p_tex_file->GetName() << "...";
           // std::cout.flush();
           SDL_RWops *rwops = SDL_RWFromMLib(p_tex_file);
           SDL_Surface *tex_surface = IMG_Load_RW(rwops, 0);

@@ -337,6 +337,13 @@ bool MLib::HasOnlyDirectories() const noexcept {
 }
 
 size_t MLib::Read(off_t offset, size_t size, void *dest) {
+  const auto file_size = GetSize();
+  if (static_cast<decltype(offset)>(file_size) <= offset) {
+    return 0;
+  }
+  if (file_size < offset + size) {
+    size = file_size - offset;
+  }
   auto read_bytes = reader_->Read(GetFileBaseOffset() + offset, size, dest);
   if (size != 0 && read_bytes == 0) {
     std::cerr << "[WARN] MLib::Read(): failed to read data in '"
